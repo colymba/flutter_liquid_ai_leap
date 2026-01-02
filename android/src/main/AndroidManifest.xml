@@ -1,0 +1,10 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="ai.liquid.leap.flutter">
+    
+    <!-- Network permission for downloading models -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    
+    <!-- Notification permission for foreground download service -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    
+</manifest>
