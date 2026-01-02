@@ -37,6 +37,9 @@ public class LiquidAiLeapPlugin: NSObject, FlutterPlugin {
     /// Registered functions indexed by conversation ID.
     private var registeredFunctions: [String: [LeapFunction]] = [:]
     
+    /// Active generation tasks indexed by conversation ID.
+    private var generationTasks: [String: Task<Void, Never>] = [:]
+    
     /// Counter for generating unique IDs.
     private var idCounter: Int = 0
     
@@ -488,7 +491,10 @@ public class LiquidAiLeapPlugin: NSObject, FlutterPlugin {
         let options = args["options"] as? [String: Any]
         let streamCallbackId = args["streamCallbackId"] as? String
         
-        Task {
+        // Cancel any existing generation for this conversation
+        generationTasks[conversationId]?.cancel()
+        
+        let task = Task {
             guard let callbackId = streamCallbackId else {
                 await MainActor.run {
                     result(FlutterError(
@@ -690,6 +696,11 @@ public class LiquidAiLeapPlugin: NSObject, FlutterPlugin {
                 await MainActor.run {
                     result(nil)
                 }
+            } catch is CancellationError {
+                // Generation was cancelled - this is expected
+                await MainActor.run {
+                    result(nil)
+                }
             } catch {
                 await MainActor.run {
                     result(FlutterError(
@@ -699,7 +710,15 @@ public class LiquidAiLeapPlugin: NSObject, FlutterPlugin {
                     ))
                 }
             }
+            
+            // Clean up task reference
+            await MainActor.run {
+                self.generationTasks.removeValue(forKey: conversationId)
+            }
         }
+        
+        // Store the task for potential cancellation
+        generationTasks[conversationId] = task
     }
     
     /// Stops an ongoing generation.
@@ -714,15 +733,13 @@ public class LiquidAiLeapPlugin: NSObject, FlutterPlugin {
             return
         }
         
-        // Note: LeapSDK's Conversation doesn't expose a direct cancel method
-        // Generation tasks are controlled by Swift's Task cancellation
-        // This would require storing Task references to cancel them
-        _ = conversationId // Suppress unused warning
-        result(FlutterError(
-            code: "NOT_IMPLEMENTED",
-            message: "Stop generation is not yet implemented. Generation will complete naturally.",
-            details: nil
-        ))
+        // Cancel the generation task if it exists
+        if let task = generationTasks[conversationId] {
+            task.cancel()
+            generationTasks.removeValue(forKey: conversationId)
+        }
+        
+        result(nil)
     }
     
     /// Registers a function for function calling.
@@ -856,6 +873,13 @@ public class LiquidAiLeapPlugin: NSObject, FlutterPlugin {
         
         conversations.removeValue(forKey: conversationId)
         registeredFunctions.removeValue(forKey: conversationId)
+        
+        // Cancel and remove any active generation task
+        if let task = generationTasks[conversationId] {
+            task.cancel()
+            generationTasks.removeValue(forKey: conversationId)
+        }
+        
         result(nil)
     }
     

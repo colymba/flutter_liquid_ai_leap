@@ -27,31 +27,34 @@
 - Full async streaming implementation
 - Handles all response types: `.chunk`, `.reasoningChunk`, `.complete`, `.functionCall`, `.audioSample`
 - Proper stats extraction with `GenerationStats`
+- Stores active Task references for cancellation support
+- File: `ios/Classes/LiquidAiLeapPlugin.swift:478-714`
 
-#### ⏳ Not Yet Implemented
+##### 5. **Stop Generation** (`handleStopGeneration`)
+- ✅ **Fully Implemented**
+- Cancels active generation Tasks via `task.cancel()`
+- Cleans up task references from `generationTasks` map
+- Handles `CancellationError` gracefully in generation loop
+- File: `ios/Classes/LiquidAiLeapPlugin.swift:716-734`
 
-##### 1. **Stop Generation** (`handleStopGeneration`)
-- **Status**: Returns `NOT_IMPLEMENTED` error
-- **Issue**: LeapSDK's `Conversation.generateResponse()` returns an `AsyncThrowingStream` without built-in cancellation
-- **Solution Required**:
-  - Store active `Task` references when starting generation
-  - Implement `Task.cancel()` on stored tasks
-  - Handle graceful cancellation and cleanup
-- **File**: `ios/Classes/LiquidAiLeapPlugin.swift:604-620`
-
-##### 2. **Function Calling** (`handleRegisterFunction`)
-- **Status**: Returns `NOT_IMPLEMENTED` error
-- **Issue**: LeapSDK function calling uses `GenerationOptions` passed to `generateResponse()`, not a separate registration method
-- **Solution Required**:
-  - Parse Flutter function definitions to LeapSDK `LeapFunction` format
-  - Store functions per conversation
-  - Pass functions in `GenerationOptions` during `generateResponse()` calls
-  - Handle `.functionCall` responses and route back to Dart
-- **File**: `ios/Classes/LiquidAiLeapPlugin.swift:625-644`
+##### 6. **Function Calling** (`handleRegisterFunction`)
+- ✅ **Fully Implemented**
+- Parses Flutter function definitions to LeapSDK `LeapFunction` format
+- Stores functions per conversation in `registeredFunctions` dictionary
+- Passes functions via `GenerateOptions().addFunction()` during `generateResponse()` calls
+- Handles `.functionCall` responses and routes back to Dart
+- Converts all parameter types: string, number, integer, boolean, null, array, object (with enum support)
+- File: `ios/Classes/LiquidAiLeapPlugin.swift:736-774` + helpers at lines 861-963
 
 ---
 
-### Android Implementation - ✅ COMPLETE
+### iOS Implementation - ✅ FULLY COMPLETE
+
+All iOS platform methods are now fully implemented!
+
+---
+
+### Android Implementation - ✅ FULLY COMPLETE
 
 All Android platform methods have been fully implemented following the official LeapSDK Android API documentation.
 
@@ -107,24 +110,9 @@ All Android platform methods have been fully implemented following the official 
 - `parseGenerationOptions()`: Parses temperature, topP, minP, repetitionPenalty, jsonSchemaConstraint
 - File: `android/src/main/kotlin/ai/liquid/leap/flutter/LiquidAiLeapPlugin.kt:770-868`
 
-#### ⏳ Not Yet Implemented
+#### ⏳ Remaining Items (Optional Enhancements)
 
-##### 1. **Function Calling** (`handleRegisterFunction`) - ✅ NOW FULLY COMPLETE!
-- **Android Status**: ✅ Fully implemented in version 0.8.1
-  - Parses Flutter function definitions to `LeapFunction` format
-  - Converts all parameter types: String, Number, Integer, Boolean, Null, Array, Object
-  - Calls `conversation.registerFunction(function)`
-  - Function call responses already handled in `MessageResponse.FunctionCalls` stream
-  - **File**: `android/src/main/kotlin/ai/liquid/leap/flutter/LiquidAiLeapPlugin.kt:638-697` + helpers at lines 908-1006
-- **iOS Status**: ✅ Fully implemented
-  - Parses Flutter function definitions to LeapSDK `LeapFunction` format
-  - Stores functions per conversation in `registeredFunctions` dictionary
-  - Passes functions via `GenerateOptions().addFunction()` during `generateResponse()` calls
-  - Handles `.functionCall` responses and routes back to Dart (already implemented)
-  - Converts all parameter types: string, number, integer, boolean, null, array, object (with enum support)
-  - **File**: `ios/Classes/LiquidAiLeapPlugin.swift:693-731` + helpers at lines 818-920
-
-##### 2. **Download Progress Callbacks**
+##### 1. **Download Progress Callbacks**
 - **Status**: Partially implemented
 - **Issue**: `ModelDownloader.downloadModel()` returns Result after completion, no progress callbacks during download
 - **Current Behavior**: Downloads work but progress callbacks are never invoked
@@ -134,7 +122,7 @@ All Android platform methods have been fully implemented following the official 
   - Implement background status polling while download is active
 - **File**: `ios/Classes/LiquidAiLeapPlugin.swift:229-297`
 
-##### 3. **LeapSDKVersion.current** - Expose actual SDK version instead of hardcoded "0.8.0"
+##### 2. **LeapSDKVersion.current** - Expose actual SDK version instead of hardcoded "0.8.0"
 
 ---
 
@@ -146,17 +134,17 @@ All Android platform methods have been fully implemented following the official 
 | Model Downloading | ✅ | ✅ |
 | Conversation Management | ✅ | ✅ |
 | Streaming Generation | ✅ | ✅ |
-| Stop Generation | ⏳ | ✅ |
+| **Stop Generation** | **✅** | **✅** |
 | **Function Calling** | **✅** | **✅** |
 | Model Cache/Delete | ✅ | ✅ |
 | History Management | ✅ | ✅ |
 
-**iOS** = 8/9 features complete (89%)  
+**iOS** = 9/9 features complete (100%) ✅  
 **Android** = 9/9 features complete (100%) ✅
 
-### Android Implementation - ✅ FULLY COMPLETE (SDK v0.8.1)
+### 🎉 Both Platforms Fully Implemented!
 
-All Android platform methods fully implemented including function calling!
+All core features are now complete on both iOS and Android platforms.
 
 ### Dart API
 

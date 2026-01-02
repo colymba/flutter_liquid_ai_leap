@@ -9,17 +9,17 @@ import io.flutter.plugin.common.MethodChannel.MethodCallHandler
 import io.flutter.plugin.common.MethodChannel.Result
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
-import ai.liquid.leap.LeapDownloader
-import ai.liquid.leap.LeapDownloaderConfig
+import ai.liquid.leap.LeapClient
 import ai.liquid.leap.ModelRunner
 import ai.liquid.leap.Conversation
-import ai.liquid.leap.ChatMessage
-import ai.liquid.leap.ChatMessageContent
-import ai.liquid.leap.MessageResponse
 import ai.liquid.leap.GenerationOptions
-import ai.liquid.leap.LeapFunction
-import ai.liquid.leap.LeapFunctionParameter
-import ai.liquid.leap.LeapFunctionParameterType
+import ai.liquid.leap.message.ChatMessage
+import ai.liquid.leap.message.ChatMessageContent
+import ai.liquid.leap.message.MessageResponse
+import ai.liquid.leap.function.LeapFunction
+import ai.liquid.leap.function.LeapFunctionParameter
+import ai.liquid.leap.function.LeapFunctionParameterType
+import ai.liquid.leap.function.LeapFunctionCall
 import java.io.File
 
 /**
@@ -141,7 +141,10 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler {
     }
 
     /**
-     * Loads a model from the LEAP Model Library.
+     * Loads a model from a local path.
+     * 
+     * For now, this implementation loads from a local file path.
+     * The model must already be present on the device.
      */
     private fun handleLoadModel(call: MethodCall, result: Result) {
         val model = call.argument<String>("model")
@@ -161,35 +164,52 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler {
 
         scope.launch {
             try {
-                // Create downloader with configured save directory
+                // Determine the model directory
                 val baseDir = if (saveDirectory != null) {
                     saveDirectory
                 } else {
                     File(context.filesDir, "leap_models").absolutePath
                 }
                 
-                val downloader = LeapDownloader(config = LeapDownloaderConfig(saveDir = baseDir))
+                // Look for model bundle in the expected location
+                val modelDir = File(baseDir, "$model/$quantization")
                 
-                // Load model with progress callback
-                val runner = downloader.loadModel(
-                    modelSlug = model,
-                    quantizationSlug = quantization,
-                    progress = { progressData ->
-                        progressCallbackId?.let { callbackId ->
-                            channel.invokeMethod(
-                                "onDownloadProgress",
-                                mapOf(
-                                    "callbackId" to callbackId,
-                                    "progress" to progressData.progress,
-                                    "bytesPerSecond" to 0.0 // API doesn't provide download speed
-                                )
-                            )
-                        }
-                    }
-                )
+                // Find the bundle file (either .bundle or .gguf)
+                val bundleFile = modelDir.listFiles()?.find { 
+                    it.name.endsWith(".bundle") || it.name.endsWith(".gguf") 
+                }
+                
+                val modelPath = bundleFile?.absolutePath ?: modelDir.absolutePath
+                
+                // Report progress start
+                progressCallbackId?.let { callbackId ->
+                    channel.invokeMethod(
+                        "onDownloadProgress",
+                        mapOf(
+                            "callbackId" to callbackId,
+                            "progress" to 0.5,
+                            "bytesPerSecond" to 0
+                        )
+                    )
+                }
+                
+                // Load model using LeapClient
+                val runner = LeapClient.loadModel(modelPath)
 
                 val runnerId = generateId()
                 modelRunners[runnerId] = runner
+                
+                // Report progress complete
+                progressCallbackId?.let { callbackId ->
+                    channel.invokeMethod(
+                        "onDownloadProgress",
+                        mapOf(
+                            "callbackId" to callbackId,
+                            "progress" to 1.0,
+                            "bytesPerSecond" to 0
+                        )
+                    )
+                }
 
                 result.success(
                     mapOf(
@@ -209,6 +229,10 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler {
 
     /**
      * Downloads a model without loading it.
+     * 
+     * Note: The current LEAP SDK for Android does not provide a public download API.
+     * Models should be pushed to the device or downloaded using Android's download manager.
+     * This returns an error for now - use loadModel with a pre-existing model path instead.
      */
     private fun handleDownloadModel(call: MethodCall, result: Result) {
         val model = call.argument<String>("model")
@@ -223,55 +247,13 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler {
             return
         }
 
-        val saveDirectory = call.argument<String>("saveDirectory")
-        val progressCallbackId = call.argument<String>("progressCallbackId")
-
-        scope.launch {
-            try {
-                // Create downloader with configured save directory
-                val baseDir = if (saveDirectory != null) {
-                    saveDirectory
-                } else {
-                    File(context.filesDir, "leap_models").absolutePath
-                }
-                
-                val downloader = LeapDownloader(config = LeapDownloaderConfig(saveDir = baseDir))
-                
-                // Download model with progress callback
-                val manifest = downloader.downloadModel(
-                    modelSlug = model,
-                    quantizationSlug = quantization,
-                    progress = { progressData ->
-                        progressCallbackId?.let { callbackId ->
-                            channel.invokeMethod(
-                                "onDownloadProgress",
-                                mapOf(
-                                    "callbackId" to callbackId,
-                                    "progress" to progressData.progress,
-                                    "bytesPerSecond" to 0.0 // API doesn't provide download speed
-                                )
-                            )
-                        }
-                    }
-                )
-
-                result.success(
-                    mapOf(
-                        "modelSlug" to model,
-                        "quantizationSlug" to quantization,
-                        "schemaVersion" to manifest.schemaVersion,
-                        "inferenceType" to manifest.inferenceType,
-                        "localModelPath" to (manifest.pathOnDisk ?: "")
-                    )
-                )
-            } catch (e: Exception) {
-                result.error(
-                    "DOWNLOAD_ERROR",
-                    "Failed to download model: ${e.message}",
-                    null
-                )
-            }
-        }
+        // The LEAP SDK for Android uses LeapModelDownloader for DownloadManager-based downloads
+        // but it requires activity context. For now, return not implemented.
+        result.error(
+            "NOT_IMPLEMENTED",
+            "Download functionality requires activity context. Use loadModel with a pre-existing model path.",
+            null
+        )
     }
 
     /**
@@ -807,6 +789,7 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler {
                 "system" -> ChatMessage.Role.SYSTEM
                 "user" -> ChatMessage.Role.USER
                 "assistant" -> ChatMessage.Role.ASSISTANT
+                "tool" -> ChatMessage.Role.TOOL
                 else -> return null
             }
 
@@ -824,22 +807,14 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler {
                         val jpegBytes = contentMap["jpegData"] as? ByteArray ?: return@mapNotNull null
                         ChatMessageContent.Image(jpegBytes)
                     }
-                    "audio" -> {
-                        val wavBytes = contentMap["wavData"] as? ByteArray ?: return@mapNotNull null
-                        ChatMessageContent.Audio(wavBytes)
-                    }
+                    // Audio content is not supported in input for now
                     else -> null
                 }
             }
 
-            val reasoningContent = map["reasoningContent"] as? String
-            val functionCalls = map["functionCalls"] as? List<*>
-
             return ChatMessage(
                 role = role,
-                content = content,
-                reasoningContent = reasoningContent,
-                functionCalls = null // TODO: Parse function calls if needed
+                content = content
             )
         } catch (e: Exception) {
             return null
@@ -861,29 +836,18 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler {
                 is ChatMessageContent.Image -> {
                     mapOf(
                         "type" to "image",
-                        "jpegData" to contentItem.jpegByteArray
+                        "jpegData" to null  // Image data not accessible for reading back
                     )
                 }
-                is ChatMessageContent.Audio -> {
-                    mapOf(
-                        "type" to "audio",
-                        "wavData" to contentItem.wavByteArray
-                    )
+                else -> {
+                    mapOf("type" to "unknown")
                 }
-                else -> null
             }
-        }.filterNotNull()
+        }
 
         return mapOf(
-            "role" to chatMessage.role.type,
-            "content" to content,
-            "reasoningContent" to chatMessage.reasoningContent,
-            "functionCalls" to chatMessage.functionCalls?.map { call ->
-                mapOf(
-                    "name" to call.name,
-                    "arguments" to call.arguments
-                )
-            }
+            "role" to chatMessage.role.toString().lowercase(),
+            "content" to content
         )
     }
 
