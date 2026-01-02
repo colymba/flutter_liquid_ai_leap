@@ -163,6 +163,7 @@ class MethodChannelLiquidAiLeap extends LiquidAiLeapPlatform {
   Future<ModelManifest> downloadModel({
     required String model,
     required String quantization,
+    String? url,
     LeapDownloaderConfig? config,
     void Function(double progress, int bytesPerSecond)? onProgress,
   }) async {
@@ -176,6 +177,7 @@ class MethodChannelLiquidAiLeap extends LiquidAiLeapPlatform {
       final result = await methodChannel.invokeMethod<Map>('downloadModel', {
         'model': model,
         'quantization': quantization,
+        if (url != null) 'url': url,
         if (config?.saveDirectory != null)
           'saveDirectory': config!.saveDirectory,
         if (progressCallbackId != null)
@@ -183,11 +185,13 @@ class MethodChannelLiquidAiLeap extends LiquidAiLeapPlatform {
       });
 
       return ModelManifest(
-        modelSlug: result!['modelSlug'] as String,
-        quantizationSlug: result['quantizationSlug'] as String,
-        schemaVersion: result['schemaVersion'] as String,
-        inferenceType: result['inferenceType'] as String,
-        localModelPath: result['localModelPath'] as String? ?? '',
+        modelSlug: result!['modelSlug'] as String? ?? model,
+        quantizationSlug: result['quantizationSlug'] as String? ?? quantization,
+        schemaVersion: result['schemaVersion'] as String? ?? '1.0',
+        inferenceType: result['inferenceType'] as String? ?? 'unknown',
+        localModelPath: result['localModelPath'] as String? ??
+            result['modelPath'] as String? ??
+            '',
       );
     } finally {
       if (progressCallbackId != null) {

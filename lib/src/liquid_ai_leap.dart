@@ -110,25 +110,38 @@ class LiquidAiLeap {
   ///
   /// Returns a [ModelManifest] with information about the downloaded model.
   ///
+  /// If [url] is provided, the model will be downloaded directly from that URL
+  /// instead of using the Leap Model Library. This is useful for VL (vision-language)
+  /// models and other models not yet available in the library.
+  ///
   /// ## Example
   ///
   /// ```dart
-  /// // Pre-download a model
+  /// // Pre-download a model from Leap Model Library
   /// final manifest = await leap.downloadModel(
   ///   model: 'LFM2-1.2B',
   ///   quantization: 'Q5_K_M',
   /// );
   /// print('Downloaded to: ${manifest.localModelPath}');
+  ///
+  /// // Download a VL model directly from HuggingFace
+  /// final vlManifest = await leap.downloadModel(
+  ///   model: 'LFM2-VL-1.6B',
+  ///   quantization: 'Q8_0',
+  ///   url: 'https://huggingface.co/LiquidAI/LeapBundles/resolve/main/LFM2-VL-1_6B_8da4w.bundle?download=true',
+  /// );
   /// ```
   Future<ModelManifest> downloadModel({
     required String model,
     required String quantization,
+    String? url,
     void Function(double progress, int bytesPerSecond)? onProgress,
     LeapDownloaderConfig? config,
   }) {
     return LiquidAiLeapPlatform.instance.downloadModel(
       model: model,
       quantization: quantization,
+      url: url,
       config: config ?? _config,
       onProgress: onProgress,
     );

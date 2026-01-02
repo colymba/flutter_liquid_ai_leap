@@ -269,7 +269,9 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
      * Downloads a model without loading it.
      * 
      * Uses the LeapModelDownloader from the SDK to download models from the
-     * Leap Model Library. Progress updates are sent via method channel callbacks.
+     * Leap Model Library. If the model is not in the library (e.g., VL models),
+     * falls back to direct URL download from HuggingFace.
+     * Progress updates are sent via method channel callbacks.
      */
     private fun handleDownloadModel(call: MethodCall, result: Result) {
         val model = call.argument<String>("model")
@@ -295,51 +297,239 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
         }
 
         val progressCallbackId = call.argument<String>("progressCallbackId")
+        val directUrl = call.argument<String>("url") // Optional direct download URL for VL models
+        val saveDirectory = call.argument<String>("saveDirectory")
 
         scope.launch {
             try {
-                // Resolve the downloadable model from the Leap Model Library
+                // First try to resolve from Leap Model Library
                 val downloadableModel = LeapDownloadableModel.resolve(model, quantization)
                 
-                if (downloadableModel == null) {
+                if (downloadableModel != null) {
+                    // Use SDK's model downloader
+                    downloadViaLeapModelLibrary(
+                        downloadableModel,
+                        currentActivity,
+                        progressCallbackId,
+                        model,
+                        quantization,
+                        result
+                    )
+                } else if (directUrl != null) {
+                    // Fallback to direct URL download for VL and other models not in library
+                    downloadViaDirectUrl(
+                        directUrl,
+                        model,
+                        quantization,
+                        saveDirectory,
+                        progressCallbackId,
+                        result
+                    )
+                } else {
                     result.error(
                         "MODEL_NOT_FOUND",
-                        "Model '$model' with quantization '$quantization' not found in Leap Model Library.",
+                        "Model '$model' with quantization '$quantization' not found in Leap Model Library. " +
+                        "For VL models, provide a direct download URL.",
                         null
                     )
-                    return@launch
+                }
+            } catch (e: Exception) {
+                result.error(
+                    "DOWNLOAD_ERROR",
+                    "Failed to download model: ${e.message}",
+                    null
+                )
+            }
+        }
+    }
+    
+    /**
+     * Downloads a model using the LeapModelDownloader from the SDK.
+     */
+    private suspend fun downloadViaLeapModelLibrary(
+        downloadableModel: LeapDownloadableModel,
+        activity: android.app.Activity,
+        progressCallbackId: String?,
+        model: String,
+        quantization: String,
+        result: Result
+    ) {
+        val modelDownloader = LeapModelDownloader(activity)
+        
+        // Start the download
+        modelDownloader.requestDownloadModel(downloadableModel)
+
+        // Poll for download status
+        var isDownloadComplete = false
+        while (!isDownloadComplete) {
+            val status = modelDownloader.queryStatus(downloadableModel)
+            
+            when (status) {
+                LeapModelDownloader.ModelDownloadStatus.NotOnLocal -> {
+                    // Download hasn't started yet, waiting...
+                    progressCallbackId?.let { callbackId ->
+                        withContext(Dispatchers.Main) {
+                            channel.invokeMethod(
+                                "onDownloadProgress",
+                                mapOf(
+                                    "callbackId" to callbackId,
+                                    "progress" to 0.0,
+                                    "bytesPerSecond" to 0
+                                )
+                            )
+                        }
+                    }
                 }
 
-                val modelDownloader = LeapModelDownloader(currentActivity)
-                
-                // Start the download
-                modelDownloader.requestDownloadModel(downloadableModel)
-
-                // Poll for download status
-                var isDownloadComplete = false
-                while (!isDownloadComplete) {
-                    val status = modelDownloader.queryStatus(downloadableModel)
-                    
-                    when (status) {
-                        LeapModelDownloader.ModelDownloadStatus.NotOnLocal -> {
-                            // Download hasn't started yet, waiting...
-                            progressCallbackId?.let { callbackId ->
-                                withContext(Dispatchers.Main) {
-                                    channel.invokeMethod(
-                                        "onDownloadProgress",
-                                        mapOf(
-                                            "callbackId" to callbackId,
-                                            "progress" to 0.0,
-                                            "bytesPerSecond" to 0
-                                        )
+                is LeapModelDownloader.ModelDownloadStatus.DownloadInProgress -> {
+                    if (status.totalSizeInBytes > 0) {
+                        val progress = status.downloadedSizeInBytes.toDouble() / status.totalSizeInBytes
+                        progressCallbackId?.let { callbackId ->
+                            withContext(Dispatchers.Main) {
+                                channel.invokeMethod(
+                                    "onDownloadProgress",
+                                    mapOf(
+                                        "callbackId" to callbackId,
+                                        "progress" to progress,
+                                        "bytesPerSecond" to 0
                                     )
-                                }
+                                )
                             }
                         }
+                    }
+                }
 
-                        is LeapModelDownloader.ModelDownloadStatus.DownloadInProgress -> {
-                            if (status.totalSizeInBytes > 0) {
-                                val progress = status.downloadedSizeInBytes.toDouble() / status.totalSizeInBytes
+                is LeapModelDownloader.ModelDownloadStatus.Downloaded -> {
+                    isDownloadComplete = true
+                    progressCallbackId?.let { callbackId ->
+                        withContext(Dispatchers.Main) {
+                            channel.invokeMethod(
+                                "onDownloadProgress",
+                                mapOf(
+                                    "callbackId" to callbackId,
+                                    "progress" to 1.0,
+                                    "bytesPerSecond" to 0
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+            
+            if (!isDownloadComplete) {
+                delay(500) // Poll every 500ms
+            }
+        }
+
+        // Get the downloaded model file path
+        val modelFile = modelDownloader.getModelFile(downloadableModel)
+
+        result.success(
+            mapOf(
+                "modelPath" to modelFile.absolutePath,
+                "modelId" to "${model}_${quantization}",
+                "model" to model,
+                "quantization" to quantization
+            )
+        )
+    }
+    
+    /**
+     * Downloads a model directly from a URL (e.g., HuggingFace).
+     * Used for VL models and other models not in the Leap Model Library.
+     */
+    private suspend fun downloadViaDirectUrl(
+        url: String,
+        model: String,
+        quantization: String,
+        saveDirectory: String?,
+        progressCallbackId: String?,
+        result: Result
+    ) {
+        withContext(Dispatchers.IO) {
+            try {
+                // Determine the save path
+                val baseDir = if (saveDirectory != null) {
+                    File(saveDirectory)
+                } else {
+                    File(context.filesDir, "leap_models")
+                }
+                
+                // Create model directory
+                val modelDir = File(baseDir, "${model}_${quantization}")
+                if (!modelDir.exists()) {
+                    modelDir.mkdirs()
+                }
+                
+                // Determine filename from URL or use default
+                val fileName = url.substringAfterLast("/").substringBefore("?")
+                    .ifEmpty { "${model}_${quantization}.bundle" }
+                val outputFile = File(modelDir, fileName)
+                
+                // Skip if already downloaded
+                if (outputFile.exists() && outputFile.length() > 0) {
+                    progressCallbackId?.let { callbackId ->
+                        withContext(Dispatchers.Main) {
+                            channel.invokeMethod(
+                                "onDownloadProgress",
+                                mapOf(
+                                    "callbackId" to callbackId,
+                                    "progress" to 1.0,
+                                    "bytesPerSecond" to 0
+                                )
+                            )
+                        }
+                    }
+                    
+                    result.success(
+                        mapOf(
+                            "modelPath" to outputFile.absolutePath,
+                            "modelId" to "${model}_${quantization}",
+                            "model" to model,
+                            "quantization" to quantization
+                        )
+                    )
+                    return@withContext
+                }
+                
+                // Download the file
+                val urlConnection = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+                urlConnection.requestMethod = "GET"
+                urlConnection.setRequestProperty("User-Agent", "LiquidAI-Leap-Flutter/1.0")
+                urlConnection.connect()
+                
+                val totalSize = urlConnection.contentLengthLong
+                var downloadedSize = 0L
+                var lastProgressUpdate = System.currentTimeMillis()
+                var lastDownloadedSize = 0L
+                
+                val tempFile = File(outputFile.parent, "${outputFile.name}.tmp")
+                
+                urlConnection.inputStream.use { input ->
+                    java.io.FileOutputStream(tempFile).use { output ->
+                        val buffer = ByteArray(8192)
+                        var bytesRead: Int
+                        
+                        while (input.read(buffer).also { bytesRead = it } != -1) {
+                            output.write(buffer, 0, bytesRead)
+                            downloadedSize += bytesRead
+                            
+                            // Update progress every 100ms
+                            val now = System.currentTimeMillis()
+                            if (now - lastProgressUpdate >= 100) {
+                                val progress = if (totalSize > 0) {
+                                    downloadedSize.toDouble() / totalSize
+                                } else {
+                                    0.0
+                                }
+                                
+                                val elapsedSeconds = (now - lastProgressUpdate) / 1000.0
+                                val bytesPerSecond = if (elapsedSeconds > 0) {
+                                    ((downloadedSize - lastDownloadedSize) / elapsedSeconds).toLong()
+                                } else {
+                                    0L
+                                }
+                                
                                 progressCallbackId?.let { callbackId ->
                                     withContext(Dispatchers.Main) {
                                         channel.invokeMethod(
@@ -347,42 +537,41 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                                             mapOf(
                                                 "callbackId" to callbackId,
                                                 "progress" to progress,
-                                                "bytesPerSecond" to 0
+                                                "bytesPerSecond" to bytesPerSecond
                                             )
                                         )
                                     }
                                 }
+                                
+                                lastProgressUpdate = now
+                                lastDownloadedSize = downloadedSize
                             }
                         }
-
-                        is LeapModelDownloader.ModelDownloadStatus.Downloaded -> {
-                            isDownloadComplete = true
-                            progressCallbackId?.let { callbackId ->
-                                withContext(Dispatchers.Main) {
-                                    channel.invokeMethod(
-                                        "onDownloadProgress",
-                                        mapOf(
-                                            "callbackId" to callbackId,
-                                            "progress" to 1.0,
-                                            "bytesPerSecond" to 0
-                                        )
-                                    )
-                                }
-                            }
-                        }
-                    }
-                    
-                    if (!isDownloadComplete) {
-                        delay(500) // Poll every 500ms
                     }
                 }
-
-                // Get the downloaded model file path
-                val modelFile = modelDownloader.getModelFile(downloadableModel)
-
+                
+                urlConnection.disconnect()
+                
+                // Rename temp file to final file
+                tempFile.renameTo(outputFile)
+                
+                // Final progress update
+                progressCallbackId?.let { callbackId ->
+                    withContext(Dispatchers.Main) {
+                        channel.invokeMethod(
+                            "onDownloadProgress",
+                            mapOf(
+                                "callbackId" to callbackId,
+                                "progress" to 1.0,
+                                "bytesPerSecond" to 0
+                            )
+                        )
+                    }
+                }
+                
                 result.success(
                     mapOf(
-                        "modelPath" to modelFile.absolutePath,
+                        "modelPath" to outputFile.absolutePath,
                         "modelId" to "${model}_${quantization}",
                         "model" to model,
                         "quantization" to quantization
@@ -391,7 +580,7 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
             } catch (e: Exception) {
                 result.error(
                     "DOWNLOAD_ERROR",
-                    "Failed to download model: ${e.message}",
+                    "Failed to download from URL: ${e.message}",
                     null
                 )
             }

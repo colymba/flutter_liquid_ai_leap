@@ -41,9 +41,14 @@ abstract class LiquidAiLeapPlatform extends PlatformInterface {
   });
 
   /// Downloads a model without loading it.
+  ///
+  /// If [url] is provided, the model will be downloaded directly from that URL
+  /// instead of using the Leap Model Library. This is useful for VL models
+  /// and other models not yet available in the library.
   Future<ModelManifest> downloadModel({
     required String model,
     required String quantization,
+    String? url,
     LeapDownloaderConfig? config,
     void Function(double progress, int bytesPerSecond)? onProgress,
   });

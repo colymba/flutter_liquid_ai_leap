@@ -247,93 +247,89 @@ public class LiquidAiLeapPlugin: NSObject, FlutterPlugin {
         }
         
         let progressCallbackId = args["progressCallbackId"] as? String
+        let directUrl = args["url"] as? String
+        let saveDirectory = args["saveDirectory"] as? String
         
         Task {
-            do {
-                // Resolve model to get downloadable model reference
-                guard let downloadableModel = await LeapDownloadableModel.resolve(
-                    modelSlug: model,
-                    quantizationSlug: quantization
-                ) else {
-                    await MainActor.run {
-                        result(FlutterError(
-                            code: "MODEL_NOT_FOUND",
-                            message: "Could not resolve model: \(model) with quantization: \(quantization)",
-                            details: nil
-                        ))
-                    }
-                    return
+            // First try to resolve from Leap Model Library
+            if let downloadableModel = await LeapDownloadableModel.resolve(
+                modelSlug: model,
+                quantizationSlug: quantization
+            ) {
+                await downloadViaLeapModelLibrary(
+                    downloadableModel: downloadableModel,
+                    model: model,
+                    quantization: quantization,
+                    progressCallbackId: progressCallbackId,
+                    result: result
+                )
+            } else if let url = directUrl, let downloadURL = URL(string: url) {
+                // Fallback to direct URL download for VL models
+                await downloadViaDirectUrl(
+                    url: downloadURL,
+                    model: model,
+                    quantization: quantization,
+                    saveDirectory: saveDirectory,
+                    progressCallbackId: progressCallbackId,
+                    result: result
+                )
+            } else {
+                await MainActor.run {
+                    result(FlutterError(
+                        code: "MODEL_NOT_FOUND",
+                        message: "Model '\(model)' with quantization '\(quantization)' not found in Leap Model Library. For VL models, provide a direct download URL.",
+                        details: nil
+                    ))
                 }
-                
-                // Create ModelDownloader instance
-                let downloader = ModelDownloader()
-                
-                // Check if model is already downloaded
-                let status = await downloader.queryStatus(downloadableModel)
-                if case .downloaded = status {
-                    let modelFile = downloader.getModelFile(downloadableModel)
-                    await MainActor.run {
-                        result([
-                            "modelSlug": model,
-                            "quantizationSlug": quantization,
-                            "schemaVersion": "1.0",
-                            "inferenceType": "gguf",
-                            "localModelPath": modelFile.path
-                        ])
-                    }
-                    return
+            }
+        }
+    }
+    
+    /// Downloads a model using the LeapModelDownloader from the SDK.
+    private func downloadViaLeapModelLibrary(
+        downloadableModel: LeapDownloadableModel,
+        model: String,
+        quantization: String,
+        progressCallbackId: String?,
+        result: @escaping FlutterResult
+    ) async {
+        do {
+            // Create ModelDownloader instance
+            let downloader = ModelDownloader()
+            
+            // Check if model is already downloaded
+            let status = await downloader.queryStatus(downloadableModel)
+            if case .downloaded = status {
+                let modelFile = downloader.getModelFile(downloadableModel)
+                await MainActor.run {
+                    result([
+                        "modelSlug": model,
+                        "quantizationSlug": quantization,
+                        "schemaVersion": "1.0",
+                        "inferenceType": "gguf",
+                        "localModelPath": modelFile.path,
+                        "modelPath": modelFile.path
+                    ])
                 }
-                
-                // Download with progress tracking
-                if let callbackId = progressCallbackId {
-                    let downloadResult = await downloader.downloadModel(downloadableModel, forceDownload: false)
-                    
-                    switch downloadResult {
-                    case .success(let modelURL):
-                        await MainActor.run {
-                            result([
-                                "modelSlug": model,
-                                "quantizationSlug": quantization,
-                                "schemaVersion": "1.0",
-                                "inferenceType": "gguf",
-                                "localModelPath": modelURL.path
-                            ])
-                        }
-                    case .failure(let error):
-                        await MainActor.run {
-                            result(FlutterError(
-                                code: "DOWNLOAD_ERROR",
-                                message: "Failed to download model: \(error.localizedDescription)",
-                                details: nil
-                            ))
-                        }
-                    }
-                } else {
-                    // Download without progress tracking
-                    let downloadResult = await downloader.downloadModel(downloadableModel, forceDownload: false)
-                    
-                    switch downloadResult {
-                    case .success(let modelURL):
-                        await MainActor.run {
-                            result([
-                                "modelSlug": model,
-                                "quantizationSlug": quantization,
-                                "schemaVersion": "1.0",
-                                "inferenceType": "gguf",
-                                "localModelPath": modelURL.path
-                            ])
-                        }
-                    case .failure(let error):
-                        await MainActor.run {
-                            result(FlutterError(
-                                code: "DOWNLOAD_ERROR",
-                                message: "Failed to download model: \(error.localizedDescription)",
-                                details: nil
-                            ))
-                        }
-                    }
+                return
+            }
+            
+            // Download the model
+            let downloadResult = await downloader.downloadModel(downloadableModel, forceDownload: false)
+            
+            switch downloadResult {
+            case .success(let modelURL):
+                await MainActor.run {
+                    result([
+                        "modelSlug": model,
+                        "quantizationSlug": quantization,
+                        "schemaVersion": "1.0",
+                        "inferenceType": "gguf",
+                        "localModelPath": modelURL.path,
+                        "modelPath": modelURL.path
+                    ])
                 }
-            } catch {
+            case .failure(let error):
                 await MainActor.run {
                     result(FlutterError(
                         code: "DOWNLOAD_ERROR",
@@ -341,6 +337,133 @@ public class LiquidAiLeapPlugin: NSObject, FlutterPlugin {
                         details: nil
                     ))
                 }
+            }
+        } catch {
+            await MainActor.run {
+                result(FlutterError(
+                    code: "DOWNLOAD_ERROR",
+                    message: "Failed to download model: \(error.localizedDescription)",
+                    details: nil
+                ))
+            }
+        }
+    }
+    
+    /// Downloads a model directly from a URL (e.g., HuggingFace).
+    /// Used for VL models and other models not in the Leap Model Library.
+    private func downloadViaDirectUrl(
+        url: URL,
+        model: String,
+        quantization: String,
+        saveDirectory: String?,
+        progressCallbackId: String?,
+        result: @escaping FlutterResult
+    ) async {
+        do {
+            // Determine save path
+            let fileManager = FileManager.default
+            let baseDir: URL
+            if let saveDir = saveDirectory {
+                baseDir = URL(fileURLWithPath: saveDir)
+            } else {
+                let documentsDir = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first!
+                baseDir = documentsDir.appendingPathComponent("leap_models")
+            }
+            
+            // Create model directory
+            let modelDir = baseDir.appendingPathComponent("\(model)_\(quantization)")
+            try? fileManager.createDirectory(at: modelDir, withIntermediateDirectories: true)
+            
+            // Determine filename from URL
+            var fileName = url.lastPathComponent
+            if let queryIndex = fileName.firstIndex(of: "?") {
+                fileName = String(fileName[..<queryIndex])
+            }
+            if fileName.isEmpty {
+                fileName = "\(model)_\(quantization).bundle"
+            }
+            let outputFile = modelDir.appendingPathComponent(fileName)
+            
+            // Skip if already downloaded
+            if fileManager.fileExists(atPath: outputFile.path) {
+                let attrs = try? fileManager.attributesOfItem(atPath: outputFile.path)
+                if let fileSize = attrs?[.size] as? Int64, fileSize > 0 {
+                    if let callbackId = progressCallbackId {
+                        await MainActor.run {
+                            self.channel.invokeMethod("onDownloadProgress", arguments: [
+                                "callbackId": callbackId,
+                                "progress": 1.0,
+                                "bytesPerSecond": 0
+                            ])
+                        }
+                    }
+                    
+                    await MainActor.run {
+                        result([
+                            "modelSlug": model,
+                            "quantizationSlug": quantization,
+                            "schemaVersion": "1.0",
+                            "inferenceType": "bundle",
+                            "localModelPath": outputFile.path,
+                            "modelPath": outputFile.path
+                        ])
+                    }
+                    return
+                }
+            }
+            
+            // Download the file
+            var request = URLRequest(url: url)
+            request.setValue("LiquidAI-Leap-Flutter/1.0", forHTTPHeaderField: "User-Agent")
+            
+            let (tempURL, response) = try await URLSession.shared.download(for: request)
+            
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200 else {
+                await MainActor.run {
+                    result(FlutterError(
+                        code: "DOWNLOAD_ERROR",
+                        message: "Failed to download from URL: HTTP error",
+                        details: nil
+                    ))
+                }
+                return
+            }
+            
+            // Move temp file to final location
+            if fileManager.fileExists(atPath: outputFile.path) {
+                try? fileManager.removeItem(at: outputFile)
+            }
+            try fileManager.moveItem(at: tempURL, to: outputFile)
+            
+            // Final progress update
+            if let callbackId = progressCallbackId {
+                await MainActor.run {
+                    self.channel.invokeMethod("onDownloadProgress", arguments: [
+                        "callbackId": callbackId,
+                        "progress": 1.0,
+                        "bytesPerSecond": 0
+                    ])
+                }
+            }
+            
+            await MainActor.run {
+                result([
+                    "modelSlug": model,
+                    "quantizationSlug": quantization,
+                    "schemaVersion": "1.0",
+                    "inferenceType": "bundle",
+                    "localModelPath": outputFile.path,
+                    "modelPath": outputFile.path
+                ])
+            }
+        } catch {
+            await MainActor.run {
+                result(FlutterError(
+                    code: "DOWNLOAD_ERROR",
+                    message: "Failed to download from URL: \(error.localizedDescription)",
+                    details: nil
+                ))
             }
         }
     }
