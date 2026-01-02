@@ -855,13 +855,13 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler {
      * Parses generation options from a Flutter map.
      */
     private fun parseGenerationOptions(map: Map<String, Any>): GenerationOptions {
-        return GenerationOptions.build {
-            (map["temperature"] as? Number)?.let { temperature = it.toFloat() }
-            (map["topP"] as? Number)?.let { topP = it.toFloat() }
-            (map["minP"] as? Number)?.let { minP = it.toFloat() }
-            (map["repetitionPenalty"] as? Number)?.let { repetitionPenalty = it.toFloat() }
-            (map["jsonSchemaConstraint"] as? String)?.let { jsonSchemaConstraint = it }
-        }
+        val options = GenerationOptions()
+        (map["temperature"] as? Number)?.let { options.temperature = it.toFloat() }
+        (map["topP"] as? Number)?.let { options.topP = it.toFloat() }
+        (map["minP"] as? Number)?.let { options.minP = it.toFloat() }
+        (map["repetitionPenalty"] as? Number)?.let { options.repetitionPenalty = it.toFloat() }
+        (map["jsonSchemaConstraint"] as? String)?.let { options.jsonSchemaConstraint = it }
+        return options
     }
 
     /**

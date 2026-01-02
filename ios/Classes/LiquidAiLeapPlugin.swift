@@ -153,19 +153,49 @@ public class LiquidAiLeapPlugin: NSObject, FlutterPlugin {
         Task {
             do {
                 // Construct the model path
-                // LeapSDK expects a .bundle path
                 let modelPath: String
                 if let saveDir = saveDirectory {
-                    modelPath = "\(saveDir)/\(model)_\(quantization).bundle"
+                    modelPath = "\(saveDir)/\(model)/\(quantization)"
                 } else {
                     // Use default documents directory
                     let documentsPath = NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true)[0]
-                    modelPath = "\(documentsPath)/leap_models/\(model)_\(quantization).bundle"
+                    modelPath = "\(documentsPath)/leap_models/\(model)/\(quantization)"
                 }
                 
-                // Check if model exists
+                // Look for model file (.bundle or .gguf)
                 let fileManager = FileManager.default
-                guard fileManager.fileExists(atPath: modelPath) else {
+                var modelURL: URL? = nil
+                
+                // Check if path exists as directory
+                var isDirectory: ObjCBool = false
+                if fileManager.fileExists(atPath: modelPath, isDirectory: &isDirectory) {
+                    if isDirectory.boolValue {
+                        // Look for .bundle or .gguf file in directory
+                        if let contents = try? fileManager.contentsOfDirectory(atPath: modelPath) {
+                            for file in contents {
+                                if file.hasSuffix(".bundle") || file.hasSuffix(".gguf") {
+                                    modelURL = URL(fileURLWithPath: modelPath).appendingPathComponent(file)
+                                    break
+                                }
+                            }
+                        }
+                        // If no bundle/gguf found, use directory itself
+                        if modelURL == nil {
+                            modelURL = URL(fileURLWithPath: modelPath)
+                        }
+                    } else {
+                        // Path is a file
+                        modelURL = URL(fileURLWithPath: modelPath)
+                    }
+                }
+                
+                // Also check for direct .bundle path
+                let bundlePath = "\(modelPath).bundle"
+                if modelURL == nil && fileManager.fileExists(atPath: bundlePath) {
+                    modelURL = URL(fileURLWithPath: bundlePath)
+                }
+                
+                guard let finalModelURL = modelURL, fileManager.fileExists(atPath: finalModelURL.path) else {
                     await MainActor.run {
                         result(FlutterError(
                             code: "MODEL_NOT_FOUND",
@@ -176,8 +206,8 @@ public class LiquidAiLeapPlugin: NSObject, FlutterPlugin {
                     return
                 }
                 
-                // Load model with LeapSDK
-                let runner = try await Leap.load(options: .init(bundlePath: modelPath))
+                // Load model with LeapSDK using URL-based API
+                let runner = try await Leap.load(url: finalModelURL)
                 
                 // Generate a unique ID for the model runner
                 let runnerId = self.generateId()
@@ -444,6 +474,7 @@ public class LiquidAiLeapPlugin: NSObject, FlutterPlugin {
                 case "system": role = .system
                 case "user": role = .user
                 case "assistant": role = .assistant
+                case "tool": role = .tool
                 default: continue
                 }
                 
@@ -535,6 +566,7 @@ public class LiquidAiLeapPlugin: NSObject, FlutterPlugin {
             case "user": role = .user
             case "system": role = .system
             case "assistant": role = .assistant
+            case "tool": role = .tool
             default:
                 await MainActor.run {
                     result(FlutterError(
@@ -562,41 +594,33 @@ public class LiquidAiLeapPlugin: NSObject, FlutterPlugin {
             
             let chatMessage = ChatMessage(role: role, content: content)
             
-            // Build generation options with registered functions
-            var generateOptions: GenerateOptions?
-            if let functions = registeredFunctions[conversationId], !functions.isEmpty {
-                generateOptions = GenerateOptions()
-                for function in functions {
-                    generateOptions?.addFunction(function)
-                }
-            }
+            // Build generation options
+            var generationOptions = GenerationOptions()
             
             // Parse additional options if provided
             if let optionsDict = options {
-                if generateOptions == nil {
-                    generateOptions = GenerateOptions()
-                }
                 if let temperature = optionsDict["temperature"] as? Double {
-                    generateOptions?.temperature = Float(temperature)
+                    generationOptions.temperature = Float(temperature)
                 }
                 if let topP = optionsDict["topP"] as? Double {
-                    generateOptions?.topP = Float(topP)
+                    generationOptions.topP = Float(topP)
                 }
                 if let minP = optionsDict["minP"] as? Double {
-                    generateOptions?.minP = Float(minP)
+                    generationOptions.minP = Float(minP)
                 }
                 if let repetitionPenalty = optionsDict["repetitionPenalty"] as? Double {
-                    generateOptions?.repetitionPenalty = Float(repetitionPenalty)
+                    generationOptions.repetitionPenalty = Float(repetitionPenalty)
                 }
             }
             
             do {
                 var fullText = ""
                 
-                // Stream responses from LeapSDK with options
-                let responseStream = generateOptions != nil 
-                    ? conversation.generateResponse(message: chatMessage, options: generateOptions!)
-                    : conversation.generateResponse(message: chatMessage)
+                // Stream responses from LeapSDK
+                let responseStream = conversation.generateResponse(
+                    message: chatMessage,
+                    generationOptions: generationOptions
+                )
                 
                 for try await response in responseStream {
                     switch response {
@@ -812,6 +836,7 @@ public class LiquidAiLeapPlugin: NSObject, FlutterPlugin {
             case .system: roleStr = "system"
             case .user: roleStr = "user"
             case .assistant: roleStr = "assistant"
+            case .tool: roleStr = "tool"
             @unknown default: roleStr = "unknown"
             }
             
@@ -937,28 +962,29 @@ public class LiquidAiLeapPlugin: NSObject, FlutterPlugin {
         switch typeName {
         case "string":
             let enumValues = dict["enumValues"] as? [String]
-            return .string(enumValues: enumValues, description: description)
+            return .string(StringType(description: description, enumValues: enumValues))
             
         case "number":
             let enumValues = dict["enumValues"] as? [Double]
-            return .number(enumValues: enumValues, description: description)
+            return .number(NumberType(description: description, enumValues: enumValues))
             
         case "integer":
             let enumValues = dict["enumValues"] as? [Int]
-            return .integer(enumValues: enumValues, description: description)
+            return .integer(IntegerType(description: description, enumValues: enumValues))
             
         case "boolean":
-            return .boolean(description: description)
+            return .boolean(BooleanType(description: description))
             
         case "null":
-            return .null
+            // NullType has no public initializer in SDK 0.8.0, return nil as unsupported
+            return nil
             
         case "array":
             guard let itemTypeDict = dict["itemType"] as? [String: Any],
                   let itemType = parseLeapFunctionParameterType(from: itemTypeDict) else {
                 return nil
             }
-            return .array(itemType: itemType, description: description)
+            return .array(ArrayType(description: description, itemType: itemType))
             
         case "object":
             guard let propertiesDict = dict["properties"] as? [String: [String: Any]] else {
@@ -973,7 +999,7 @@ public class LiquidAiLeapPlugin: NSObject, FlutterPlugin {
             }
             
             let required = dict["required"] as? [String] ?? []
-            return .object(properties: properties, required: required, description: description)
+            return .object(ObjectType(description: description, properties: properties, required: required))
             
         default:
             return nil
