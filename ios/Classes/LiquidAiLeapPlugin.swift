@@ -370,8 +370,8 @@ public class LiquidAiLeapPlugin: NSObject, FlutterPlugin {
                 baseDir = documentsDir.appendingPathComponent("leap_models")
             }
             
-            // Create model directory
-            let modelDir = baseDir.appendingPathComponent("\(model)_\(quantization)")
+            // Create model directory - use model/quantization structure to match loadModel
+            let modelDir = baseDir.appendingPathComponent(model).appendingPathComponent(quantization)
             try? fileManager.createDirectory(at: modelDir, withIntermediateDirectories: true)
             
             // Determine filename from URL

@@ -455,8 +455,8 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                     File(context.filesDir, "leap_models")
                 }
                 
-                // Create model directory
-                val modelDir = File(baseDir, "${model}_${quantization}")
+                // Create model directory - use model/quantization structure to match loadModel
+                val modelDir = File(baseDir, "$model/$quantization")
                 if (!modelDir.exists()) {
                     modelDir.mkdirs()
                 }
