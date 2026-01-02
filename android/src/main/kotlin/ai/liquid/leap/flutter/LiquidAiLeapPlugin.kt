@@ -8,6 +8,19 @@ import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler
 import io.flutter.plugin.common.MethodChannel.Result
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
+import ai.liquid.leap.LeapDownloader
+import ai.liquid.leap.LeapDownloaderConfig
+import ai.liquid.leap.ModelRunner
+import ai.liquid.leap.Conversation
+import ai.liquid.leap.ChatMessage
+import ai.liquid.leap.ChatMessageContent
+import ai.liquid.leap.MessageResponse
+import ai.liquid.leap.GenerationOptions
+import ai.liquid.leap.LeapFunction
+import ai.liquid.leap.LeapFunctionParameter
+import ai.liquid.leap.LeapFunctionParameterType
+import java.io.File
 
 /**
  * Flutter plugin for the Liquid AI LEAP SDK.
@@ -44,10 +57,10 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler {
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     /** Active model runners indexed by their ID. */
-    private val modelRunners = mutableMapOf<String, Any>()
+    private val modelRunners = mutableMapOf<String, ModelRunner>()
 
     /** Active conversations indexed by their ID. */
-    private val conversations = mutableMapOf<String, Any>()
+    private val conversations = mutableMapOf<String, Conversation>()
 
     /** Active generation jobs indexed by conversation ID. */
     private val generationJobs = mutableMapOf<String, Job>()
@@ -148,29 +161,35 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler {
 
         scope.launch {
             try {
-                // Simulate progress callbacks
-                progressCallbackId?.let { callbackId ->
-                    for (i in 0..10) {
-                        channel.invokeMethod(
-                            "onDownloadProgress",
-                            mapOf(
-                                "callbackId" to callbackId,
-                                "progress" to (i.toDouble() / 10.0),
-                                "bytesPerSecond" to (1024 * 1024 * 10) // 10 MB/s
-                            )
-                        )
-                        delay(100)
-                    }
+                // Create downloader with configured save directory
+                val baseDir = if (saveDirectory != null) {
+                    saveDirectory
+                } else {
+                    File(context.filesDir, "leap_models").absolutePath
                 }
-
-                // TODO: Implement actual model loading with LeapSDK
-                // val downloader = LeapDownloader(LeapDownloaderConfig(saveDir = saveDirectory ?: ""))
-                // val runner = downloader.loadModel(model, quantization)
+                
+                val downloader = LeapDownloader(config = LeapDownloaderConfig(saveDir = baseDir))
+                
+                // Load model with progress callback
+                val runner = downloader.loadModel(
+                    modelSlug = model,
+                    quantizationSlug = quantization,
+                    progress = { progressData ->
+                        progressCallbackId?.let { callbackId ->
+                            channel.invokeMethod(
+                                "onDownloadProgress",
+                                mapOf(
+                                    "callbackId" to callbackId,
+                                    "progress" to progressData.progress,
+                                    "bytesPerSecond" to 0.0 // API doesn't provide download speed
+                                )
+                            )
+                        }
+                    }
+                )
 
                 val runnerId = generateId()
-                
-                // TODO: Store actual ModelRunner instance
-                // modelRunners[runnerId] = runner
+                modelRunners[runnerId] = runner
 
                 result.success(
                     mapOf(
@@ -204,17 +223,45 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler {
             return
         }
 
+        val saveDirectory = call.argument<String>("saveDirectory")
+        val progressCallbackId = call.argument<String>("progressCallbackId")
+
         scope.launch {
             try {
-                // TODO: Implement actual model download with LeapSDK
+                // Create downloader with configured save directory
+                val baseDir = if (saveDirectory != null) {
+                    saveDirectory
+                } else {
+                    File(context.filesDir, "leap_models").absolutePath
+                }
+                
+                val downloader = LeapDownloader(config = LeapDownloaderConfig(saveDir = baseDir))
+                
+                // Download model with progress callback
+                val manifest = downloader.downloadModel(
+                    modelSlug = model,
+                    quantizationSlug = quantization,
+                    progress = { progressData ->
+                        progressCallbackId?.let { callbackId ->
+                            channel.invokeMethod(
+                                "onDownloadProgress",
+                                mapOf(
+                                    "callbackId" to callbackId,
+                                    "progress" to progressData.progress,
+                                    "bytesPerSecond" to 0.0 // API doesn't provide download speed
+                                )
+                            )
+                        }
+                    }
+                )
 
                 result.success(
                     mapOf(
                         "modelSlug" to model,
                         "quantizationSlug" to quantization,
-                        "schemaVersion" to "1.0",
-                        "inferenceType" to "gguf",
-                        "localModelPath" to "/path/to/model"
+                        "schemaVersion" to manifest.schemaVersion,
+                        "inferenceType" to manifest.inferenceType,
+                        "localModelPath" to (manifest.pathOnDisk ?: "")
                     )
                 )
             } catch (e: Exception) {
@@ -243,8 +290,28 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler {
             return
         }
 
-        // TODO: Check actual cache status
-        result.success(false)
+        val saveDirectory = call.argument<String>("saveDirectory")
+
+        try {
+            // Check if model directory exists
+            val baseDir = if (saveDirectory != null) {
+                saveDirectory
+            } else {
+                File(context.filesDir, "leap_models").absolutePath
+            }
+            
+            // Models are stored in: baseDir/model/quantization/
+            val modelPath = File(baseDir, "$model/$quantization")
+            val isCached = modelPath.exists() && modelPath.isDirectory
+            
+            result.success(isCached)
+        } catch (e: Exception) {
+            result.error(
+                "CACHE_CHECK_ERROR",
+                "Failed to check cache status: ${e.message}",
+                null
+            )
+        }
     }
 
     /**
@@ -263,8 +330,27 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler {
             return
         }
 
-        // TODO: Delete actual cached model
-        result.success(false)
+        val saveDirectory = call.argument<String>("saveDirectory")
+
+        try {
+            // Delete model directory
+            val baseDir = if (saveDirectory != null) {
+                saveDirectory
+            } else {
+                File(context.filesDir, "leap_models").absolutePath
+            }
+            
+            val modelPath = File(baseDir, "$model/$quantization")
+            val deleted = modelPath.deleteRecursively()
+            
+            result.success(deleted)
+        } catch (e: Exception) {
+            result.error(
+                "DELETE_ERROR",
+                "Failed to delete model: ${e.message}",
+                null
+            )
+        }
     }
 
     /**
@@ -284,15 +370,34 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler {
 
         val systemPrompt = call.argument<String>("systemPrompt")
 
-        // TODO: Get actual ModelRunner and create conversation
-        // val runner = modelRunners[runnerId]
-        // val conversation = runner.createConversation(systemPrompt)
+        try {
+            // Get the model runner
+            val runner = modelRunners[runnerId]
+            if (runner == null) {
+                result.error(
+                    "RUNNER_NOT_FOUND",
+                    "Model runner not found: $runnerId",
+                    null
+                )
+                return
+            }
 
-        val conversationId = generateId()
-        
-        result.success(
-            mapOf("conversationId" to conversationId)
-        )
+            // Create conversation with optional system prompt
+            val conversation = runner.createConversation(systemPrompt)
+
+            val conversationId = generateId()
+            conversations[conversationId] = conversation
+            
+            result.success(
+                mapOf("conversationId" to conversationId)
+            )
+        } catch (e: Exception) {
+            result.error(
+                "CONVERSATION_ERROR",
+                "Failed to create conversation: ${e.message}",
+                null
+            )
+        }
     }
 
     /**
@@ -311,12 +416,39 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler {
             return
         }
 
-        // TODO: Parse history and create conversation
-        val conversationId = generateId()
+        try {
+            // Get the model runner
+            val runner = modelRunners[runnerId]
+            if (runner == null) {
+                result.error(
+                    "RUNNER_NOT_FOUND",
+                    "Model runner not found: $runnerId",
+                    null
+                )
+                return
+            }
 
-        result.success(
-            mapOf("conversationId" to conversationId)
-        )
+            // Parse history into ChatMessage list
+            val chatMessages = history.mapNotNull { message ->
+                parseChatMessage(message)
+            }
+
+            // Create conversation from history
+            val conversation = runner.createConversationFromHistory(chatMessages)
+
+            val conversationId = generateId()
+            conversations[conversationId] = conversation
+
+            result.success(
+                mapOf("conversationId" to conversationId)
+            )
+        } catch (e: Exception) {
+            result.error(
+                "CONVERSATION_ERROR",
+                "Failed to create conversation from history: ${e.message}",
+                null
+            )
+        }
     }
 
     /**
@@ -350,49 +482,121 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler {
         // Cancel any existing generation for this conversation
         generationJobs[conversationId]?.cancel()
 
-        // TODO: Implement actual generation with LeapSDK
+        // Implement actual generation with LeapSDK
         val job = scope.launch {
             try {
-                // Simulate streaming response
-                val tokens = listOf("Hello", "!", " How", " can", " I", " help", " you", " today", "?")
-
-                for (token in tokens) {
-                    if (!isActive) break
-                    
-                    channel.invokeMethod(
-                        "onGenerationResponse",
-                        mapOf(
-                            "callbackId" to streamCallbackId,
-                            "type" to "chunk",
-                            "text" to token
-                        )
+                // Get the conversation
+                val conversation = conversations[conversationId]
+                if (conversation == null) {
+                    result.error(
+                        "CONVERSATION_NOT_FOUND",
+                        "Conversation not found: $conversationId",
+                        null
                     )
-                    delay(50)
+                    return@launch
                 }
 
-                if (isActive) {
-                    // Send completion
-                    channel.invokeMethod(
-                        "onGenerationResponse",
-                        mapOf(
-                            "callbackId" to streamCallbackId,
-                            "type" to "complete",
-                            "message" to mapOf(
-                                "role" to "assistant",
-                                "content" to listOf(
-                                    mapOf("type" to "text", "text" to tokens.joinToString(""))
+                // Parse the chat message
+                val chatMessage = parseChatMessage(message)
+                if (chatMessage == null) {
+                    result.error(
+                        "INVALID_MESSAGE",
+                        "Failed to parse message",
+                        null
+                    )
+                    return@launch
+                }
+
+                // Parse generation options if provided
+                val generationOptions = options?.let { parseGenerationOptions(it) }
+
+                // Generate response using Flow
+                conversation.generateResponse(chatMessage, generationOptions)
+                    .onEach { response ->
+                        when (response) {
+                            is MessageResponse.Chunk -> {
+                                channel.invokeMethod(
+                                    "onGenerationResponse",
+                                    mapOf(
+                                        "callbackId" to streamCallbackId,
+                                        "type" to "chunk",
+                                        "text" to response.text
+                                    )
                                 )
-                            ),
-                            "finishReason" to "stop",
-                            "stats" to mapOf(
-                                "promptTokens" to 10,
-                                "completionTokens" to tokens.size,
-                                "totalTokens" to (10 + tokens.size),
-                                "tokensPerSecond" to 20.0
-                            )
+                            }
+                            is MessageResponse.ReasoningChunk -> {
+                                channel.invokeMethod(
+                                    "onGenerationResponse",
+                                    mapOf(
+                                        "callbackId" to streamCallbackId,
+                                        "type" to "reasoningChunk",
+                                        "reasoning" to response.reasoning
+                                    )
+                                )
+                            }
+                            is MessageResponse.FunctionCalls -> {
+                                val calls = response.functionCalls.map { call ->
+                                    mapOf(
+                                        "name" to call.name,
+                                        "arguments" to call.arguments
+                                    )
+                                }
+                                channel.invokeMethod(
+                                    "onGenerationResponse",
+                                    mapOf(
+                                        "callbackId" to streamCallbackId,
+                                        "type" to "functionCall",
+                                        "calls" to calls
+                                    )
+                                )
+                            }
+                            is MessageResponse.AudioSample -> {
+                                channel.invokeMethod(
+                                    "onGenerationResponse",
+                                    mapOf(
+                                        "callbackId" to streamCallbackId,
+                                        "type" to "audioSample",
+                                        "samples" to response.samples.toList(),
+                                        "sampleRate" to response.sampleRate
+                                    )
+                                )
+                            }
+                            is MessageResponse.Complete -> {
+                                // Convert ChatMessage to map
+                                val messageMap = chatMessageToMap(response.fullMessage)
+                                val statsMap = response.stats?.let {
+                                    mapOf(
+                                        "promptTokens" to it.promptTokens,
+                                        "completionTokens" to it.completionTokens,
+                                        "totalTokens" to it.totalTokens,
+                                        "tokensPerSecond" to it.tokenPerSecond
+                                    )
+                                }
+
+                                channel.invokeMethod(
+                                    "onGenerationResponse",
+                                    mapOf(
+                                        "callbackId" to streamCallbackId,
+                                        "type" to "complete",
+                                        "message" to messageMap,
+                                        "finishReason" to response.finishReason.toString().lowercase(),
+                                        "stats" to statsMap
+                                    )
+                                )
+                            }
+                        }
+                    }
+                    .onCompletion {
+                        // Flow completed
+                    }
+                    .catch { e ->
+                        result.error(
+                            "GENERATION_ERROR",
+                            "Generation failed: ${e.message}",
+                            null
                         )
-                    )
-                }
+                    }
+                    .collect()
 
                 result.success(null)
             } catch (e: Exception) {
@@ -447,8 +651,40 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler {
             return
         }
 
-        // TODO: Register function with actual conversation
-        result.success(null)
+        try {
+            // Get the conversation
+            val conversation = conversations[conversationId]
+            if (conversation == null) {
+                result.error(
+                    "CONVERSATION_NOT_FOUND",
+                    "Conversation not found: $conversationId",
+                    null
+                )
+                return
+            }
+
+            // Parse the function definition
+            val leapFunction = parseLeapFunction(function)
+            if (leapFunction == null) {
+                result.error(
+                    "INVALID_FUNCTION",
+                    "Failed to parse function definition",
+                    null
+                )
+                return
+            }
+
+            // Register the function with the conversation
+            conversation.registerFunction(leapFunction)
+
+            result.success(null)
+        } catch (e: Exception) {
+            result.error(
+                "REGISTER_FUNCTION_ERROR",
+                "Failed to register function: ${e.message}",
+                null
+            )
+        }
     }
 
     /**
@@ -466,8 +702,31 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler {
             return
         }
 
-        // TODO: Get actual conversation history
-        result.success(listOf<Map<String, Any>>())
+        try {
+            // Get the conversation
+            val conversation = conversations[conversationId]
+            if (conversation == null) {
+                result.error(
+                    "CONVERSATION_NOT_FOUND",
+                    "Conversation not found: $conversationId",
+                    null
+                )
+                return
+            }
+
+            // Convert history to map list
+            val history = conversation.history.map { chatMessage ->
+                chatMessageToMap(chatMessage)
+            }
+
+            result.success(history)
+        } catch (e: Exception) {
+            result.error(
+                "HISTORY_ERROR",
+                "Failed to get history: ${e.message}",
+                null
+            )
+        }
     }
 
     /**
@@ -485,9 +744,24 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler {
             return
         }
 
-        // TODO: Unload actual model
-        modelRunners.remove(runnerId)
-        result.success(null)
+        scope.launch {
+            try {
+                // Get the model runner
+                val runner = modelRunners[runnerId]
+                if (runner != null) {
+                    // Unload the model
+                    runner.unload()
+                    modelRunners.remove(runnerId)
+                }
+                result.success(null)
+            } catch (e: Exception) {
+                result.error(
+                    "UNLOAD_ERROR",
+                    "Failed to unload model: ${e.message}",
+                    null
+                )
+            }
+        }
     }
 
     /**
@@ -521,5 +795,196 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler {
     private fun generateId(): String {
         idCounter++
         return "android_${idCounter}_${System.currentTimeMillis()}"
+    }
+
+    /**
+     * Parses a Flutter map into a ChatMessage.
+     */
+    private fun parseChatMessage(map: Map<String, Any>): ChatMessage? {
+        try {
+            val roleStr = map["role"] as? String ?: return null
+            val role = when (roleStr) {
+                "system" -> ChatMessage.Role.SYSTEM
+                "user" -> ChatMessage.Role.USER
+                "assistant" -> ChatMessage.Role.ASSISTANT
+                else -> return null
+            }
+
+            val contentList = map["content"] as? List<*> ?: return null
+            val content = contentList.mapNotNull { item ->
+                val contentMap = item as? Map<*, *> ?: return@mapNotNull null
+                val type = contentMap["type"] as? String
+
+                when (type) {
+                    "text" -> {
+                        val text = contentMap["text"] as? String ?: return@mapNotNull null
+                        ChatMessageContent.Text(text)
+                    }
+                    "image" -> {
+                        val jpegBytes = contentMap["jpegData"] as? ByteArray ?: return@mapNotNull null
+                        ChatMessageContent.Image(jpegBytes)
+                    }
+                    "audio" -> {
+                        val wavBytes = contentMap["wavData"] as? ByteArray ?: return@mapNotNull null
+                        ChatMessageContent.Audio(wavBytes)
+                    }
+                    else -> null
+                }
+            }
+
+            val reasoningContent = map["reasoningContent"] as? String
+            val functionCalls = map["functionCalls"] as? List<*>
+
+            return ChatMessage(
+                role = role,
+                content = content,
+                reasoningContent = reasoningContent,
+                functionCalls = null // TODO: Parse function calls if needed
+            )
+        } catch (e: Exception) {
+            return null
+        }
+    }
+
+    /**
+     * Converts a ChatMessage to a Flutter map.
+     */
+    private fun chatMessageToMap(chatMessage: ChatMessage): Map<String, Any?> {
+        val content = chatMessage.content.map { contentItem ->
+            when (contentItem) {
+                is ChatMessageContent.Text -> {
+                    mapOf(
+                        "type" to "text",
+                        "text" to contentItem.text
+                    )
+                }
+                is ChatMessageContent.Image -> {
+                    mapOf(
+                        "type" to "image",
+                        "jpegData" to contentItem.jpegByteArray
+                    )
+                }
+                is ChatMessageContent.Audio -> {
+                    mapOf(
+                        "type" to "audio",
+                        "wavData" to contentItem.wavByteArray
+                    )
+                }
+                else -> null
+            }
+        }.filterNotNull()
+
+        return mapOf(
+            "role" to chatMessage.role.type,
+            "content" to content,
+            "reasoningContent" to chatMessage.reasoningContent,
+            "functionCalls" to chatMessage.functionCalls?.map { call ->
+                mapOf(
+                    "name" to call.name,
+                    "arguments" to call.arguments
+                )
+            }
+        )
+    }
+
+    /**
+     * Parses generation options from a Flutter map.
+     */
+    private fun parseGenerationOptions(map: Map<String, Any>): GenerationOptions {
+        return GenerationOptions.build {
+            (map["temperature"] as? Number)?.let { temperature = it.toFloat() }
+            (map["topP"] as? Number)?.let { topP = it.toFloat() }
+            (map["minP"] as? Number)?.let { minP = it.toFloat() }
+            (map["repetitionPenalty"] as? Number)?.let { repetitionPenalty = it.toFloat() }
+            (map["jsonSchemaConstraint"] as? String)?.let { jsonSchemaConstraint = it }
+        }
+    }
+
+    /**
+     * Parses a Flutter function definition map into LeapFunction.
+     */
+    private fun parseLeapFunction(map: Map<String, Any>): LeapFunction? {
+        try {
+            val name = map["name"] as? String ?: return null
+            val description = map["description"] as? String ?: return null
+            val parametersMap = map["parameters"] as? List<*> ?: return null
+
+            val parameters = parametersMap.mapNotNull { param ->
+                val paramMap = param as? Map<*, *> ?: return@mapNotNull null
+                val paramName = paramMap["name"] as? String ?: return@mapNotNull null
+                val paramDescription = paramMap["description"] as? String ?: ""
+                val paramOptional = paramMap["optional"] as? Boolean ?: false
+                val paramType = paramMap["type"] as? Map<*, *> ?: return@mapNotNull null
+
+                val type = parseLeapFunctionParameterType(paramType) ?: return@mapNotNull null
+
+                LeapFunctionParameter(
+                    name = paramName,
+                    type = type,
+                    description = paramDescription,
+                    optional = paramOptional
+                )
+            }
+
+            return LeapFunction(
+                name = name,
+                description = description,
+                parameters = parameters
+            )
+        } catch (e: Exception) {
+            return null
+        }
+    }
+
+    /**
+     * Parses a Flutter parameter type map into LeapFunctionParameterType.
+     */
+    private fun parseLeapFunctionParameterType(map: Map<*, *>): LeapFunctionParameterType? {
+        try {
+            val typeName = map["type"] as? String ?: return null
+            val description = map["description"] as? String
+
+            return when (typeName) {
+                "string" -> {
+                    val enumValues = (map["enumValues"] as? List<*>)?.mapNotNull { it as? String }
+                    LeapFunctionParameterType.String(enumValues, description)
+                }
+                "number" -> {
+                    val enumValues = (map["enumValues"] as? List<*>)?.mapNotNull { it as? Number }
+                    LeapFunctionParameterType.Number(enumValues, description)
+                }
+                "integer" -> {
+                    val enumValues = (map["enumValues"] as? List<*>)?.mapNotNull { (it as? Number)?.toInt() }
+                    LeapFunctionParameterType.Integer(enumValues, description)
+                }
+                "boolean" -> {
+                    LeapFunctionParameterType.Boolean(description)
+                }
+                "null" -> {
+                    LeapFunctionParameterType.Null()
+                }
+                "array" -> {
+                    val itemTypeMap = map["itemType"] as? Map<*, *> ?: return null
+                    val itemType = parseLeapFunctionParameterType(itemTypeMap) ?: return null
+                    LeapFunctionParameterType.Array(itemType, description)
+                }
+                "object" -> {
+                    val propertiesMap = map["properties"] as? Map<*, *> ?: return null
+                    val properties = propertiesMap.mapNotNull { (key, value) ->
+                        val propName = key as? String ?: return@mapNotNull null
+                        val propTypeMap = value as? Map<*, *> ?: return@mapNotNull null
+                        val propType = parseLeapFunctionParameterType(propTypeMap) ?: return@mapNotNull null
+                        propName to propType
+                    }.toMap()
+
+                    val required = (map["required"] as? List<*>)?.mapNotNull { it as? String } ?: listOf()
+
+                    LeapFunctionParameterType.Object(properties, required, description)
+                }
+                else -> null
+            }
+        } catch (e: Exception) {
+            return null
+        }
     }
 }

@@ -1,5 +1,7 @@
 import Flutter
 import UIKit
+import LeapSDK
+import LeapModelDownloader
 
 /// Flutter plugin for the Liquid AI LEAP SDK.
 ///
@@ -122,7 +124,7 @@ public class LiquidAiLeapPlugin: NSObject, FlutterPlugin {
     
     /// Returns the LEAP SDK version.
     private func handleGetSdkVersion(result: @escaping FlutterResult) {
-        // TODO: Get actual SDK version from LeapSDK
+        // LeapSDK doesn't expose a version property, so we return the known version
         result("0.8.0")
     }
     
@@ -142,32 +144,40 @@ public class LiquidAiLeapPlugin: NSObject, FlutterPlugin {
         let saveDirectory = args["saveDirectory"] as? String
         let progressCallbackId = args["progressCallbackId"] as? String
         
-        // TODO: Implement actual model loading with LeapSDK
-        // This is a placeholder implementation
         Task {
             do {
-                // Simulate progress callbacks
-                if let callbackId = progressCallbackId {
-                    for i in stride(from: 0.0, through: 1.0, by: 0.1) {
-                        await MainActor.run {
-                            self.channel.invokeMethod(
-                                "onDownloadProgress",
-                                arguments: [
-                                    "callbackId": callbackId,
-                                    "progress": i,
-                                    "bytesPerSecond": 1024 * 1024 * 10 // 10 MB/s
-                                ]
-                            )
-                        }
-                        try await Task.sleep(nanoseconds: 100_000_000) // 0.1s
-                    }
+                // Construct the model path
+                // LeapSDK expects a .bundle path
+                let modelPath: String
+                if let saveDir = saveDirectory {
+                    modelPath = "\(saveDir)/\(model)_\(quantization).bundle"
+                } else {
+                    // Use default documents directory
+                    let documentsPath = NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true)[0]
+                    modelPath = "\(documentsPath)/leap_models/\(model)_\(quantization).bundle"
                 }
+                
+                // Check if model exists
+                let fileManager = FileManager.default
+                guard fileManager.fileExists(atPath: modelPath) else {
+                    await MainActor.run {
+                        result(FlutterError(
+                            code: "MODEL_NOT_FOUND",
+                            message: "Model not found at path: \(modelPath). Please download it first.",
+                            details: nil
+                        ))
+                    }
+                    return
+                }
+                
+                // Load model with LeapSDK
+                let runner = try await Leap.load(options: .init(bundlePath: modelPath))
                 
                 // Generate a unique ID for the model runner
                 let runnerId = self.generateId()
                 
-                // TODO: Store actual ModelRunner instance
-                // self.modelRunners[runnerId] = runner
+                // Store the ModelRunner instance
+                self.modelRunners[runnerId] = runner
                 
                 await MainActor.run {
                     result([
@@ -200,19 +210,92 @@ public class LiquidAiLeapPlugin: NSObject, FlutterPlugin {
             return
         }
         
-        // TODO: Implement actual model download with LeapSDK
+        let progressCallbackId = args["progressCallbackId"] as? String
+        
         Task {
             do {
-                // TODO: Call LeapModelDownloader.downloadModel
+                // Resolve model to get downloadable model reference
+                guard let downloadableModel = await LeapDownloadableModel.resolve(
+                    modelSlug: model,
+                    quantizationSlug: quantization
+                ) else {
+                    await MainActor.run {
+                        result(FlutterError(
+                            code: "MODEL_NOT_FOUND",
+                            message: "Could not resolve model: \(model) with quantization: \(quantization)",
+                            details: nil
+                        ))
+                    }
+                    return
+                }
                 
-                await MainActor.run {
-                    result([
-                        "modelSlug": model,
-                        "quantizationSlug": quantization,
-                        "schemaVersion": "1.0",
-                        "inferenceType": "gguf",
-                        "localModelPath": "/path/to/model"
-                    ])
+                // Create ModelDownloader instance
+                let downloader = ModelDownloader()
+                
+                // Check if model is already downloaded
+                let status = await downloader.queryStatus(downloadableModel)
+                if case .downloaded = status {
+                    let modelFile = downloader.getModelFile(downloadableModel)
+                    await MainActor.run {
+                        result([
+                            "modelSlug": model,
+                            "quantizationSlug": quantization,
+                            "schemaVersion": "1.0",
+                            "inferenceType": "gguf",
+                            "localModelPath": modelFile.path
+                        ])
+                    }
+                    return
+                }
+                
+                // Download with progress tracking
+                if let callbackId = progressCallbackId {
+                    let downloadResult = await downloader.downloadModel(downloadableModel, forceDownload: false)
+                    
+                    switch downloadResult {
+                    case .success(let modelURL):
+                        await MainActor.run {
+                            result([
+                                "modelSlug": model,
+                                "quantizationSlug": quantization,
+                                "schemaVersion": "1.0",
+                                "inferenceType": "gguf",
+                                "localModelPath": modelURL.path
+                            ])
+                        }
+                    case .failure(let error):
+                        await MainActor.run {
+                            result(FlutterError(
+                                code: "DOWNLOAD_ERROR",
+                                message: "Failed to download model: \(error.localizedDescription)",
+                                details: nil
+                            ))
+                        }
+                    }
+                } else {
+                    // Download without progress tracking
+                    let downloadResult = await downloader.downloadModel(downloadableModel, forceDownload: false)
+                    
+                    switch downloadResult {
+                    case .success(let modelURL):
+                        await MainActor.run {
+                            result([
+                                "modelSlug": model,
+                                "quantizationSlug": quantization,
+                                "schemaVersion": "1.0",
+                                "inferenceType": "gguf",
+                                "localModelPath": modelURL.path
+                            ])
+                        }
+                    case .failure(let error):
+                        await MainActor.run {
+                            result(FlutterError(
+                                code: "DOWNLOAD_ERROR",
+                                message: "Failed to download model: \(error.localizedDescription)",
+                                details: nil
+                            ))
+                        }
+                    }
                 }
             } catch {
                 await MainActor.run {
@@ -229,8 +312,8 @@ public class LiquidAiLeapPlugin: NSObject, FlutterPlugin {
     /// Checks if a model is cached.
     private func handleIsModelCached(call: FlutterMethodCall, result: @escaping FlutterResult) {
         guard let args = call.arguments as? [String: Any],
-              let _ = args["model"] as? String,
-              let _ = args["quantization"] as? String else {
+              let model = args["model"] as? String,
+              let quantization = args["quantization"] as? String else {
             result(FlutterError(
                 code: "INVALID_ARGUMENTS",
                 message: "Missing required arguments: model, quantization",
@@ -239,15 +322,20 @@ public class LiquidAiLeapPlugin: NSObject, FlutterPlugin {
             return
         }
         
-        // TODO: Check actual cache status
-        result(false)
+        // Construct the model path
+        let documentsPath = NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true)[0]
+        let modelPath = "\(documentsPath)/leap_models/\(model)_\(quantization).bundle"
+        
+        // Check if model bundle exists
+        let fileManager = FileManager.default
+        result(fileManager.fileExists(atPath: modelPath))
     }
     
     /// Deletes a cached model.
     private func handleDeleteModel(call: FlutterMethodCall, result: @escaping FlutterResult) {
         guard let args = call.arguments as? [String: Any],
-              let _ = args["model"] as? String,
-              let _ = args["quantization"] as? String else {
+              let model = args["model"] as? String,
+              let quantization = args["quantization"] as? String else {
             result(FlutterError(
                 code: "INVALID_ARGUMENTS",
                 message: "Missing required arguments: model, quantization",
@@ -256,8 +344,24 @@ public class LiquidAiLeapPlugin: NSObject, FlutterPlugin {
             return
         }
         
-        // TODO: Delete actual cached model
-        result(false)
+        do {
+            let documentsPath = NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true)[0]
+            let modelPath = "\(documentsPath)/leap_models/\(model)_\(quantization).bundle"
+            
+            let fileManager = FileManager.default
+            if fileManager.fileExists(atPath: modelPath) {
+                try fileManager.removeItem(atPath: modelPath)
+                result(true)
+            } else {
+                result(false)
+            }
+        } catch {
+            result(FlutterError(
+                code: "DELETE_ERROR",
+                message: "Failed to delete model: \(error.localizedDescription)",
+                details: nil
+            ))
+        }
     }
     
     /// Creates a new conversation.
@@ -274,8 +378,26 @@ public class LiquidAiLeapPlugin: NSObject, FlutterPlugin {
         
         let systemPrompt = args["systemPrompt"] as? String
         
-        // TODO: Get actual ModelRunner and create conversation
+        guard let runnerAny = modelRunners[runnerId],
+              let runner = runnerAny as? ModelRunner else {
+            result(FlutterError(
+                code: "INVALID_RUNNER",
+                message: "Model runner not found: \(runnerId)",
+                details: nil
+            ))
+            return
+        }
+        
+        // Create conversation with optional system prompt
+        var history: [ChatMessage] = []
+        if let prompt = systemPrompt {
+            history.append(ChatMessage(role: .system, content: [.text(prompt)]))
+        }
+        
+        let conversation = Conversation(modelRunner: runner, history: history)
         let conversationId = generateId()
+        
+        conversations[conversationId] = conversation
         
         result([
             "conversationId": conversationId
@@ -295,8 +417,52 @@ public class LiquidAiLeapPlugin: NSObject, FlutterPlugin {
             return
         }
         
-        // TODO: Parse history and create conversation
+        guard let runnerAny = modelRunners[runnerId],
+              let runner = runnerAny as? ModelRunner else {
+            result(FlutterError(
+                code: "INVALID_RUNNER",
+                message: "Model runner not found: \(runnerId)",
+                details: nil
+            ))
+            return
+        }
+        
+        // Parse history from Flutter format to LeapSDK ChatMessage format
+        var history: [ChatMessage] = []
+        for messageDict in args["history"] as! [[String: Any]] {
+            if let roleStr = messageDict["role"] as? String,
+               let contentList = messageDict["content"] as? [[String: Any]] {
+                
+                let role: ChatMessageRole
+                switch roleStr {
+                case "system": role = .system
+                case "user": role = .user
+                case "assistant": role = .assistant
+                default: continue
+                }
+                
+                var content: [ChatMessageContent] = []
+                for contentDict in contentList {
+                    if let type = contentDict["type"] as? String {
+                        switch type {
+                        case "text":
+                            if let text = contentDict["text"] as? String {
+                                content.append(.text(text))
+                            }
+                        default:
+                            break
+                        }
+                    }
+                }
+                
+                history.append(ChatMessage(role: role, content: content))
+            }
+        }
+        
+        let conversation = Conversation(modelRunner: runner, history: history)
         let conversationId = generateId()
+        
+        conversations[conversationId] = conversation
         
         result([
             "conversationId": conversationId
@@ -319,7 +485,6 @@ public class LiquidAiLeapPlugin: NSObject, FlutterPlugin {
         let options = args["options"] as? [String: Any]
         let streamCallbackId = args["streamCallbackId"] as? String
         
-        // TODO: Implement actual generation with LeapSDK
         Task {
             guard let callbackId = streamCallbackId else {
                 await MainActor.run {
@@ -332,47 +497,172 @@ public class LiquidAiLeapPlugin: NSObject, FlutterPlugin {
                 return
             }
             
-            // Simulate streaming response
-            let tokens = ["Hello", "!", " How", " can", " I", " help", " you", " today", "?"]
-            
-            for token in tokens {
+            guard let conversation = conversations[conversationId] as? Conversation else {
                 await MainActor.run {
-                    self.channel.invokeMethod(
-                        "onGenerationResponse",
-                        arguments: [
-                            "callbackId": callbackId,
-                            "type": "chunk",
-                            "text": token
-                        ]
-                    )
+                    result(FlutterError(
+                        code: "INVALID_CONVERSATION",
+                        message: "Conversation not found: \(conversationId)",
+                        details: nil
+                    ))
                 }
-                try? await Task.sleep(nanoseconds: 50_000_000) // 0.05s
+                return
             }
             
-            // Send completion
-            await MainActor.run {
-                self.channel.invokeMethod(
-                    "onGenerationResponse",
-                    arguments: [
-                        "callbackId": callbackId,
-                        "type": "complete",
-                        "message": [
-                            "role": "assistant",
-                            "content": [["type": "text", "text": tokens.joined()]]
-                        ],
-                        "finishReason": "stop",
-                        "stats": [
-                            "promptTokens": 10,
-                            "completionTokens": tokens.count,
-                            "totalTokens": 10 + tokens.count,
-                            "tokensPerSecond": 20.0
-                        ]
-                    ]
-                )
+            // Parse message
+            guard let roleStr = message["role"] as? String,
+                  let contentList = message["content"] as? [[String: Any]] else {
+                await MainActor.run {
+                    result(FlutterError(
+                        code: "INVALID_MESSAGE",
+                        message: "Invalid message format",
+                        details: nil
+                    ))
+                }
+                return
             }
             
-            await MainActor.run {
-                result(nil)
+            let role: ChatMessageRole
+            switch roleStr {
+            case "user": role = .user
+            case "system": role = .system
+            case "assistant": role = .assistant
+            default:
+                await MainActor.run {
+                    result(FlutterError(
+                        code: "INVALID_ROLE",
+                        message: "Invalid message role: \(roleStr)",
+                        details: nil
+                    ))
+                }
+                return
+            }
+            
+            var content: [ChatMessageContent] = []
+            for contentDict in contentList {
+                if let type = contentDict["type"] as? String {
+                    switch type {
+                    case "text":
+                        if let text = contentDict["text"] as? String {
+                            content.append(.text(text))
+                        }
+                    default:
+                        break
+                    }
+                }
+            }
+            
+            let chatMessage = ChatMessage(role: role, content: content)
+            
+            do {
+                var fullText = ""
+                
+                // Stream responses from LeapSDK
+                for try await response in conversation.generateResponse(message: chatMessage) {
+                    switch response {
+                    case .chunk(let text):
+                        fullText += text
+                        await MainActor.run {
+                            self.channel.invokeMethod(
+                                "onGenerationResponse",
+                                arguments: [
+                                    "callbackId": callbackId,
+                                    "type": "chunk",
+                                    "text": text
+                                ]
+                            )
+                        }
+                        
+                    case .reasoningChunk(let reasoning):
+                        await MainActor.run {
+                            self.channel.invokeMethod(
+                                "onGenerationResponse",
+                                arguments: [
+                                    "callbackId": callbackId,
+                                    "type": "reasoning",
+                                    "text": reasoning
+                                ]
+                            )
+                        }
+                        
+                    case .complete(let completion):
+                        await MainActor.run {
+                            let stats: [String: Any]
+                            if let generationStats = completion.stats {
+                                stats = [
+                                    "promptTokens": generationStats.promptTokens,
+                                    "completionTokens": generationStats.completionTokens,
+                                    "totalTokens": generationStats.totalTokens,
+                                    "tokensPerSecond": generationStats.tokenPerSecond
+                                ]
+                            } else {
+                                stats = [
+                                    "promptTokens": 0,
+                                    "completionTokens": 0,
+                                    "totalTokens": 0,
+                                    "tokensPerSecond": 0.0
+                                ]
+                            }
+                            
+                            self.channel.invokeMethod(
+                                "onGenerationResponse",
+                                arguments: [
+                                    "callbackId": callbackId,
+                                    "type": "complete",
+                                    "message": [
+                                        "role": "assistant",
+                                        "content": [["type": "text", "text": fullText]]
+                                    ],
+                                    "finishReason": "\(completion.finishReason)",
+                                    "stats": stats
+                                ]
+                            )
+                        }
+                        
+                    case .functionCall(let calls):
+                        // Handle function calling (not yet implemented)
+                        await MainActor.run {
+                            self.channel.invokeMethod(
+                                "onGenerationResponse",
+                                arguments: [
+                                    "callbackId": callbackId,
+                                    "type": "functionCall",
+                                    "calls": calls.map { call in
+                                        [
+                                            "name": call.name,
+                                            "arguments": call.arguments ?? [:]
+                                        ]
+                                    }
+                                ]
+                            )
+                        }
+                        
+                    case .audioSample(let samples, let sampleRate):
+                        // Handle audio samples (not yet implemented)
+                        await MainActor.run {
+                            self.channel.invokeMethod(
+                                "onGenerationResponse",
+                                arguments: [
+                                    "callbackId": callbackId,
+                                    "type": "audioSample",
+                                    "samplesCount": samples.count,
+                                    "sampleRate": sampleRate
+                                ]
+                            )
+                        }
+                    }
+                }
+                
+                await MainActor.run {
+                    result(nil)
+                }
+            } catch {
+                await MainActor.run {
+                    result(FlutterError(
+                        code: "GENERATION_ERROR",
+                        message: "Failed to generate response: \(error.localizedDescription)",
+                        details: nil
+                    ))
+                }
             }
         }
     }
@@ -380,7 +670,7 @@ public class LiquidAiLeapPlugin: NSObject, FlutterPlugin {
     /// Stops an ongoing generation.
     private func handleStopGeneration(call: FlutterMethodCall, result: @escaping FlutterResult) {
         guard let args = call.arguments as? [String: Any],
-              let _ = args["conversationId"] as? String else {
+              let conversationId = args["conversationId"] as? String else {
             result(FlutterError(
                 code: "INVALID_ARGUMENTS",
                 message: "Missing required argument: conversationId",
@@ -389,15 +679,22 @@ public class LiquidAiLeapPlugin: NSObject, FlutterPlugin {
             return
         }
         
-        // TODO: Cancel actual generation
-        result(nil)
+        // Note: LeapSDK's Conversation doesn't expose a direct cancel method
+        // Generation tasks are controlled by Swift's Task cancellation
+        // This would require storing Task references to cancel them
+        _ = conversationId // Suppress unused warning
+        result(FlutterError(
+            code: "NOT_IMPLEMENTED",
+            message: "Stop generation is not yet implemented. Generation will complete naturally.",
+            details: nil
+        ))
     }
     
     /// Registers a function for function calling.
     private func handleRegisterFunction(call: FlutterMethodCall, result: @escaping FlutterResult) {
         guard let args = call.arguments as? [String: Any],
-              let _ = args["conversationId"] as? String,
-              let _ = args["function"] as? [String: Any] else {
+              let conversationId = args["conversationId"] as? String,
+              let function = args["function"] as? [String: Any] else {
             result(FlutterError(
                 code: "INVALID_ARGUMENTS",
                 message: "Missing required arguments: conversationId, function",
@@ -406,14 +703,22 @@ public class LiquidAiLeapPlugin: NSObject, FlutterPlugin {
             return
         }
         
-        // TODO: Register function with actual conversation
-        result(nil)
+        // Note: Function calling requires using LeapSDK's function calling API
+        // which involves setting up function definitions in GenerateOptions
+        // This is not directly exposed through Conversation but through model options
+        _ = conversationId // Suppress unused warning
+        _ = function // Suppress unused warning
+        result(FlutterError(
+            code: "NOT_IMPLEMENTED",
+            message: "Function calling is not yet implemented in the Flutter wrapper.",
+            details: nil
+        ))
     }
     
     /// Gets the conversation history.
     private func handleGetConversationHistory(call: FlutterMethodCall, result: @escaping FlutterResult) {
         guard let args = call.arguments as? [String: Any],
-              let _ = args["conversationId"] as? String else {
+              let conversationId = args["conversationId"] as? String else {
             result(FlutterError(
                 code: "INVALID_ARGUMENTS",
                 message: "Missing required argument: conversationId",
@@ -422,8 +727,41 @@ public class LiquidAiLeapPlugin: NSObject, FlutterPlugin {
             return
         }
         
-        // TODO: Get actual conversation history
-        result([])
+        guard let conversation = conversations[conversationId] as? Conversation else {
+            result(FlutterError(
+                code: "INVALID_CONVERSATION",
+                message: "Conversation not found: \(conversationId)",
+                details: nil
+            ))
+            return
+        }
+        
+        // Convert LeapSDK ChatMessage to Flutter format
+        let historyArray = conversation.history.map { message -> [String: Any] in
+            let roleStr: String
+            switch message.role {
+            case .system: roleStr = "system"
+            case .user: roleStr = "user"
+            case .assistant: roleStr = "assistant"
+            @unknown default: roleStr = "unknown"
+            }
+            
+            let contentArray = message.content.map { content -> [String: Any] in
+                switch content {
+                case .text(let text):
+                    return ["type": "text", "text": text]
+                @unknown default:
+                    return ["type": "unknown", "data": "unsupported content type"]
+                }
+            }
+            
+            return [
+                "role": roleStr,
+                "content": contentArray
+            ]
+        }
+        
+        result(historyArray)
     }
     
     /// Unloads a model.
@@ -438,7 +776,16 @@ public class LiquidAiLeapPlugin: NSObject, FlutterPlugin {
             return
         }
         
-        // TODO: Unload actual model
+        guard modelRunners[runnerId] != nil else {
+            result(FlutterError(
+                code: "INVALID_RUNNER",
+                message: "Model runner not found: \(runnerId)",
+                details: nil
+            ))
+            return
+        }
+        
+        // Remove the model runner (LeapSDK handles cleanup automatically)
         modelRunners.removeValue(forKey: runnerId)
         result(nil)
     }

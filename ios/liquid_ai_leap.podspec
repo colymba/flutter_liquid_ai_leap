@@ -22,13 +22,23 @@ Liquid Foundation Models (LFM) via the Liquid AI LEAP SDK.
   s.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES', 'EXCLUDED_ARCHS[sdk=iphonesimulator*]' => 'i386' }
   s.swift_version = '5.9'
 
-  # LEAP SDK dependency via Swift Package Manager
-  # The SDK is added via Swift Package Manager in the example app
-  # See: https://github.com/Liquid4All/leap-ios
-  # 
-  # To add the dependency:
-  # 1. In Xcode: File -> Add Package Dependencies
-  # 2. Enter: https://github.com/Liquid4All/leap-ios.git
-  # 3. Select version 0.7.0 or newer
-  # 4. Add LeapSDK and optionally LeapModelDownloader
+  # LEAP SDK - Vendored XCFrameworks
+  # Pre-built frameworks from https://github.com/Liquid4All/leap-ios/releases
+  # Download using: ./scripts/download_frameworks.sh
+  s.vendored_frameworks = 'Frameworks/LeapSDK.xcframework', 'Frameworks/LeapModelDownloader.xcframework'
+  
+  # Prepare command to download frameworks if they don't exist
+  s.prepare_command = <<-CMD
+    if [ ! -d "Frameworks/LeapSDK.xcframework" ] || [ ! -d "Frameworks/LeapModelDownloader.xcframework" ]; then
+      echo "⚠️  LeapSDK frameworks not found. Downloading..."
+      if [ -f "../../scripts/download_frameworks.sh" ]; then
+        bash ../../scripts/download_frameworks.sh v0.8.0
+      else
+        echo "❌ Error: download_frameworks.sh not found"
+        exit 1
+      fi
+    else
+      echo "✅ LeapSDK frameworks found"
+    fi
+  CMD
 end

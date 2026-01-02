@@ -1,0 +1,3 @@
+# XCFrameworks are downloaded by the script and should not be committed
+LeapSDK.xcframework/
+LeapModelDownloader.xcframework/

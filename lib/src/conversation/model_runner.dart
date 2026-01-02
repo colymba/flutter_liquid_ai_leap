@@ -58,3 +58,4 @@ abstract class ModelRunner {
   /// );
   /// ```
   Future<Conversation> createConversationFromHistory(List<ChatMessage> history);
+}
