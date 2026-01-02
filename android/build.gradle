@@ -57,5 +57,6 @@ android {
         implementation "org.jetbrains.kotlin:kotlin-stdlib:$kotlin_version"
         implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0"
         implementation "ai.liquid.leap:leap-sdk:0.8.1"
+        implementation "ai.liquid.leap:leap-model-downloader:0.8.1"
     }
 }

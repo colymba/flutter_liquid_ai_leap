@@ -1,8 +1,11 @@
 package ai.liquid.leap.flutter
 
+import android.app.Activity
 import android.content.Context
 import android.os.Build
 import io.flutter.embedding.engine.plugins.FlutterPlugin
+import io.flutter.embedding.engine.plugins.activity.ActivityAware
+import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler
@@ -20,6 +23,8 @@ import ai.liquid.leap.function.LeapFunction
 import ai.liquid.leap.function.LeapFunctionParameter
 import ai.liquid.leap.function.LeapFunctionParameterType
 import ai.liquid.leap.function.LeapFunctionCall
+import ai.liquid.leap.downloader.LeapModelDownloader
+import ai.liquid.leap.downloader.LeapDownloadableModel
 import java.io.File
 
 /**
@@ -43,7 +48,7 @@ import java.io.File
  * - Physical device recommended (3GB+ RAM)
  * - LeapSDK 0.8.0+
  */
-class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler {
+class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
 
     // MARK: - Properties
 
@@ -52,6 +57,9 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler {
 
     /** The application context. */
     private lateinit var context: Context
+
+    /** The current activity (needed for model downloads). */
+    private var activity: Activity? = null
 
     /** Coroutine scope for async operations. */
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
@@ -121,6 +129,36 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler {
         conversations.clear()
         generationJobs.values.forEach { it.cancel() }
         generationJobs.clear()
+    }
+
+    // MARK: - ActivityAware Implementation
+
+    /**
+     * Called when the plugin is attached to an Activity.
+     */
+    override fun onAttachedToActivity(binding: ActivityPluginBinding) {
+        activity = binding.activity
+    }
+
+    /**
+     * Called when the plugin is detached from Activity for config changes.
+     */
+    override fun onDetachedFromActivityForConfigChanges() {
+        activity = null
+    }
+
+    /**
+     * Called when the plugin is reattached to an Activity for config changes.
+     */
+    override fun onReattachedToActivityForConfigChanges(binding: ActivityPluginBinding) {
+        activity = binding.activity
+    }
+
+    /**
+     * Called when the plugin is detached from an Activity.
+     */
+    override fun onDetachedFromActivity() {
+        activity = null
     }
 
     // MARK: - Handler Methods
@@ -230,9 +268,8 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler {
     /**
      * Downloads a model without loading it.
      * 
-     * Note: The current LEAP SDK for Android does not provide a public download API.
-     * Models should be pushed to the device or downloaded using Android's download manager.
-     * This returns an error for now - use loadModel with a pre-existing model path instead.
+     * Uses the LeapModelDownloader from the SDK to download models from the
+     * Leap Model Library. Progress updates are sent via method channel callbacks.
      */
     private fun handleDownloadModel(call: MethodCall, result: Result) {
         val model = call.argument<String>("model")
@@ -247,17 +284,124 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler {
             return
         }
 
-        // The LEAP SDK for Android uses LeapModelDownloader for DownloadManager-based downloads
-        // but it requires activity context. For now, return not implemented.
-        result.error(
-            "NOT_IMPLEMENTED",
-            "Download functionality requires activity context. Use loadModel with a pre-existing model path.",
-            null
-        )
+        val currentActivity = activity
+        if (currentActivity == null) {
+            result.error(
+                "NO_ACTIVITY",
+                "Download functionality requires an active Activity context. Please try again when the app is in the foreground.",
+                null
+            )
+            return
+        }
+
+        val progressCallbackId = call.argument<String>("progressCallbackId")
+
+        scope.launch {
+            try {
+                // Resolve the downloadable model from the Leap Model Library
+                val downloadableModel = LeapDownloadableModel.resolve(model, quantization)
+                
+                if (downloadableModel == null) {
+                    result.error(
+                        "MODEL_NOT_FOUND",
+                        "Model '$model' with quantization '$quantization' not found in Leap Model Library.",
+                        null
+                    )
+                    return@launch
+                }
+
+                val modelDownloader = LeapModelDownloader(currentActivity)
+                
+                // Start the download
+                modelDownloader.requestDownloadModel(downloadableModel)
+
+                // Poll for download status
+                var isDownloadComplete = false
+                while (!isDownloadComplete) {
+                    val status = modelDownloader.queryStatus(downloadableModel)
+                    
+                    when (status) {
+                        LeapModelDownloader.ModelDownloadStatus.NotOnLocal -> {
+                            // Download hasn't started yet, waiting...
+                            progressCallbackId?.let { callbackId ->
+                                withContext(Dispatchers.Main) {
+                                    channel.invokeMethod(
+                                        "onDownloadProgress",
+                                        mapOf(
+                                            "callbackId" to callbackId,
+                                            "progress" to 0.0,
+                                            "bytesPerSecond" to 0
+                                        )
+                                    )
+                                }
+                            }
+                        }
+
+                        is LeapModelDownloader.ModelDownloadStatus.DownloadInProgress -> {
+                            if (status.totalSizeInBytes > 0) {
+                                val progress = status.downloadedSizeInBytes.toDouble() / status.totalSizeInBytes
+                                progressCallbackId?.let { callbackId ->
+                                    withContext(Dispatchers.Main) {
+                                        channel.invokeMethod(
+                                            "onDownloadProgress",
+                                            mapOf(
+                                                "callbackId" to callbackId,
+                                                "progress" to progress,
+                                                "bytesPerSecond" to 0
+                                            )
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        is LeapModelDownloader.ModelDownloadStatus.Downloaded -> {
+                            isDownloadComplete = true
+                            progressCallbackId?.let { callbackId ->
+                                withContext(Dispatchers.Main) {
+                                    channel.invokeMethod(
+                                        "onDownloadProgress",
+                                        mapOf(
+                                            "callbackId" to callbackId,
+                                            "progress" to 1.0,
+                                            "bytesPerSecond" to 0
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    
+                    if (!isDownloadComplete) {
+                        delay(500) // Poll every 500ms
+                    }
+                }
+
+                // Get the downloaded model file path
+                val modelFile = modelDownloader.getModelFile(downloadableModel)
+
+                result.success(
+                    mapOf(
+                        "modelPath" to modelFile.absolutePath,
+                        "modelId" to "${model}_${quantization}",
+                        "model" to model,
+                        "quantization" to quantization
+                    )
+                )
+            } catch (e: Exception) {
+                result.error(
+                    "DOWNLOAD_ERROR",
+                    "Failed to download model: ${e.message}",
+                    null
+                )
+            }
+        }
     }
 
     /**
      * Checks if a model is cached.
+     * 
+     * Checks both the local leap_models directory and the LeapModelDownloader cache.
      */
     private fun handleIsModelCached(call: MethodCall, result: Result) {
         val model = call.argument<String>("model")
@@ -273,31 +417,49 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler {
         }
 
         val saveDirectory = call.argument<String>("saveDirectory")
+        val currentActivity = activity
 
-        try {
-            // Check if model directory exists
-            val baseDir = if (saveDirectory != null) {
-                saveDirectory
-            } else {
-                File(context.filesDir, "leap_models").absolutePath
+        scope.launch {
+            try {
+                // First check if model is in custom save directory
+                val baseDir = if (saveDirectory != null) {
+                    saveDirectory
+                } else {
+                    File(context.filesDir, "leap_models").absolutePath
+                }
+                
+                val modelPath = File(baseDir, "$model/$quantization")
+                var isCached = modelPath.exists() && modelPath.isDirectory
+                
+                // If not found locally and we have activity context, check via LeapModelDownloader
+                if (!isCached && currentActivity != null) {
+                    try {
+                        val downloadableModel = LeapDownloadableModel.resolve(model, quantization)
+                        if (downloadableModel != null) {
+                            val modelDownloader = LeapModelDownloader(currentActivity)
+                            val status = modelDownloader.queryStatus(downloadableModel)
+                            isCached = status is LeapModelDownloader.ModelDownloadStatus.Downloaded
+                        }
+                    } catch (e: Exception) {
+                        // Ignore errors from downloader check, fall back to local check
+                    }
+                }
+                
+                result.success(isCached)
+            } catch (e: Exception) {
+                result.error(
+                    "CACHE_CHECK_ERROR",
+                    "Failed to check cache status: ${e.message}",
+                    null
+                )
             }
-            
-            // Models are stored in: baseDir/model/quantization/
-            val modelPath = File(baseDir, "$model/$quantization")
-            val isCached = modelPath.exists() && modelPath.isDirectory
-            
-            result.success(isCached)
-        } catch (e: Exception) {
-            result.error(
-                "CACHE_CHECK_ERROR",
-                "Failed to check cache status: ${e.message}",
-                null
-            )
         }
     }
 
     /**
      * Deletes a cached model.
+     * 
+     * Deletes from both the local directory and the LeapModelDownloader cache.
      */
     private fun handleDeleteModel(call: MethodCall, result: Result) {
         val model = call.argument<String>("model")
@@ -313,25 +475,48 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler {
         }
 
         val saveDirectory = call.argument<String>("saveDirectory")
+        val currentActivity = activity
 
-        try {
-            // Delete model directory
-            val baseDir = if (saveDirectory != null) {
-                saveDirectory
-            } else {
-                File(context.filesDir, "leap_models").absolutePath
+        scope.launch {
+            try {
+                var deleted = false
+                
+                // Delete from custom save directory
+                val baseDir = if (saveDirectory != null) {
+                    saveDirectory
+                } else {
+                    File(context.filesDir, "leap_models").absolutePath
+                }
+                
+                val modelPath = File(baseDir, "$model/$quantization")
+                if (modelPath.exists()) {
+                    deleted = modelPath.deleteRecursively()
+                }
+                
+                // Also try to delete from LeapModelDownloader cache
+                if (currentActivity != null) {
+                    try {
+                        val downloadableModel = LeapDownloadableModel.resolve(model, quantization)
+                        if (downloadableModel != null) {
+                            val modelDownloader = LeapModelDownloader(currentActivity)
+                            val modelFile = modelDownloader.getModelFile(downloadableModel)
+                            if (modelFile.exists()) {
+                                deleted = modelFile.deleteRecursively() || deleted
+                            }
+                        }
+                    } catch (e: Exception) {
+                        // Ignore errors from downloader delete
+                    }
+                }
+                
+                result.success(deleted)
+            } catch (e: Exception) {
+                result.error(
+                    "DELETE_ERROR",
+                    "Failed to delete model: ${e.message}",
+                    null
+                )
             }
-            
-            val modelPath = File(baseDir, "$model/$quantization")
-            val deleted = modelPath.deleteRecursively()
-            
-            result.success(deleted)
-        } catch (e: Exception) {
-            result.error(
-                "DELETE_ERROR",
-                "Failed to delete model: ${e.message}",
-                null
-            )
         }
     }
 
