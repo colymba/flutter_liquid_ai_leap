@@ -34,6 +34,9 @@ public class LiquidAiLeapPlugin: NSObject, FlutterPlugin {
     /// Active conversations indexed by their ID.
     private var conversations: [String: Any] = [:]
     
+    /// Registered functions indexed by conversation ID.
+    private var registeredFunctions: [String: [LeapFunction]] = [:]
+    
     /// Counter for generating unique IDs.
     private var idCounter: Int = 0
     
@@ -553,11 +556,43 @@ public class LiquidAiLeapPlugin: NSObject, FlutterPlugin {
             
             let chatMessage = ChatMessage(role: role, content: content)
             
+            // Build generation options with registered functions
+            var generateOptions: GenerateOptions?
+            if let functions = registeredFunctions[conversationId], !functions.isEmpty {
+                generateOptions = GenerateOptions()
+                for function in functions {
+                    generateOptions?.addFunction(function)
+                }
+            }
+            
+            // Parse additional options if provided
+            if let optionsDict = options {
+                if generateOptions == nil {
+                    generateOptions = GenerateOptions()
+                }
+                if let temperature = optionsDict["temperature"] as? Double {
+                    generateOptions?.temperature = Float(temperature)
+                }
+                if let topP = optionsDict["topP"] as? Double {
+                    generateOptions?.topP = Float(topP)
+                }
+                if let minP = optionsDict["minP"] as? Double {
+                    generateOptions?.minP = Float(minP)
+                }
+                if let repetitionPenalty = optionsDict["repetitionPenalty"] as? Double {
+                    generateOptions?.repetitionPenalty = Float(repetitionPenalty)
+                }
+            }
+            
             do {
                 var fullText = ""
                 
-                // Stream responses from LeapSDK
-                for try await response in conversation.generateResponse(message: chatMessage) {
+                // Stream responses from LeapSDK with options
+                let responseStream = generateOptions != nil 
+                    ? conversation.generateResponse(message: chatMessage, options: generateOptions!)
+                    : conversation.generateResponse(message: chatMessage)
+                
+                for try await response in responseStream {
                     switch response {
                     case .chunk(let text):
                         fullText += text
@@ -694,7 +729,7 @@ public class LiquidAiLeapPlugin: NSObject, FlutterPlugin {
     private func handleRegisterFunction(call: FlutterMethodCall, result: @escaping FlutterResult) {
         guard let args = call.arguments as? [String: Any],
               let conversationId = args["conversationId"] as? String,
-              let function = args["function"] as? [String: Any] else {
+              let functionDict = args["function"] as? [String: Any] else {
             result(FlutterError(
                 code: "INVALID_ARGUMENTS",
                 message: "Missing required arguments: conversationId, function",
@@ -703,16 +738,33 @@ public class LiquidAiLeapPlugin: NSObject, FlutterPlugin {
             return
         }
         
-        // Note: Function calling requires using LeapSDK's function calling API
-        // which involves setting up function definitions in GenerateOptions
-        // This is not directly exposed through Conversation but through model options
-        _ = conversationId // Suppress unused warning
-        _ = function // Suppress unused warning
-        result(FlutterError(
-            code: "NOT_IMPLEMENTED",
-            message: "Function calling is not yet implemented in the Flutter wrapper.",
-            details: nil
-        ))
+        // Verify conversation exists
+        guard conversations[conversationId] != nil else {
+            result(FlutterError(
+                code: "INVALID_CONVERSATION",
+                message: "Conversation not found: \(conversationId)",
+                details: nil
+            ))
+            return
+        }
+        
+        // Parse the function definition
+        guard let leapFunction = parseLeapFunction(from: functionDict) else {
+            result(FlutterError(
+                code: "INVALID_FUNCTION",
+                message: "Failed to parse function definition",
+                details: nil
+            ))
+            return
+        }
+        
+        // Store the function for this conversation
+        if registeredFunctions[conversationId] == nil {
+            registeredFunctions[conversationId] = []
+        }
+        registeredFunctions[conversationId]?.append(leapFunction)
+        
+        result(nil)
     }
     
     /// Gets the conversation history.
@@ -803,6 +855,7 @@ public class LiquidAiLeapPlugin: NSObject, FlutterPlugin {
         }
         
         conversations.removeValue(forKey: conversationId)
+        registeredFunctions.removeValue(forKey: conversationId)
         result(nil)
     }
     
@@ -812,5 +865,94 @@ public class LiquidAiLeapPlugin: NSObject, FlutterPlugin {
     private func generateId() -> String {
         idCounter += 1
         return "ios_\(idCounter)_\(Date().timeIntervalSince1970)"
+    }
+    
+    /// Parses a Flutter function definition into a LeapFunction.
+    private func parseLeapFunction(from dict: [String: Any]) -> LeapFunction? {
+        guard let name = dict["name"] as? String,
+              let description = dict["description"] as? String,
+              let parametersArray = dict["parameters"] as? [[String: Any]] else {
+            return nil
+        }
+        
+        var parameters: [LeapFunctionParameter] = []
+        for paramDict in parametersArray {
+            guard let paramName = paramDict["name"] as? String,
+                  let paramTypeDict = paramDict["type"] as? [String: Any],
+                  let paramType = parseLeapFunctionParameterType(from: paramTypeDict) else {
+                continue
+            }
+            
+            let paramDescription = paramDict["description"] as? String ?? ""
+            let paramOptional = paramDict["optional"] as? Bool ?? false
+            
+            let parameter = LeapFunctionParameter(
+                name: paramName,
+                type: paramType,
+                description: paramDescription,
+                optional: paramOptional
+            )
+            parameters.append(parameter)
+        }
+        
+        return LeapFunction(
+            name: name,
+            description: description,
+            parameters: parameters
+        )
+    }
+    
+    /// Parses a Flutter parameter type into a LeapFunctionParameterType.
+    private func parseLeapFunctionParameterType(from dict: [String: Any]) -> LeapFunctionParameterType? {
+        guard let typeName = dict["type"] as? String else {
+            return nil
+        }
+        
+        let description = dict["description"] as? String
+        
+        switch typeName {
+        case "string":
+            let enumValues = dict["enumValues"] as? [String]
+            return .string(enumValues: enumValues, description: description)
+            
+        case "number":
+            let enumValues = dict["enumValues"] as? [Double]
+            return .number(enumValues: enumValues, description: description)
+            
+        case "integer":
+            let enumValues = dict["enumValues"] as? [Int]
+            return .integer(enumValues: enumValues, description: description)
+            
+        case "boolean":
+            return .boolean(description: description)
+            
+        case "null":
+            return .null
+            
+        case "array":
+            guard let itemTypeDict = dict["itemType"] as? [String: Any],
+                  let itemType = parseLeapFunctionParameterType(from: itemTypeDict) else {
+                return nil
+            }
+            return .array(itemType: itemType, description: description)
+            
+        case "object":
+            guard let propertiesDict = dict["properties"] as? [String: [String: Any]] else {
+                return nil
+            }
+            
+            var properties: [String: LeapFunctionParameterType] = [:]
+            for (key, valueDict) in propertiesDict {
+                if let valueType = parseLeapFunctionParameterType(from: valueDict) {
+                    properties[key] = valueType
+                }
+            }
+            
+            let required = dict["required"] as? [String] ?? []
+            return .object(properties: properties, required: required, description: description)
+            
+        default:
+            return nil
+        }
     }
 }

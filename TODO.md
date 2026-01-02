@@ -109,21 +109,20 @@ All Android platform methods have been fully implemented following the official 
 
 #### ⏳ Not Yet Implemented
 
-##### 1. **Function Calling** (`handleRegisterFunction`) - ✅ NOW COMPLETE ON ANDROID!
+##### 1. **Function Calling** (`handleRegisterFunction`) - ✅ NOW FULLY COMPLETE!
 - **Android Status**: ✅ Fully implemented in version 0.8.1
   - Parses Flutter function definitions to `LeapFunction` format
   - Converts all parameter types: String, Number, Integer, Boolean, Null, Array, Object
   - Calls `conversation.registerFunction(function)`
   - Function call responses already handled in `MessageResponse.FunctionCalls` stream
   - **File**: `android/src/main/kotlin/ai/liquid/leap/flutter/LiquidAiLeapPlugin.kt:638-697` + helpers at lines 908-1006
-- **iOS Status**: ⏳ Still returns `NOT_IMPLEMENTED` error
-  - **Issue**: LeapSDK function calling uses `GenerationOptions` passed to `generateResponse()`, not a separate registration method
-  - **Solution Required**:
-    - Parse Flutter function definitions to LeapSDK `LeapFunction` format
-    - Store functions per conversation
-    - Pass functions in `GenerationOptions` during `generateResponse()` calls
-    - Handle `.functionCall` responses and route back to Dart
-  - **File**: `ios/Classes/LiquidAiLeapPlugin.swift:625-644`
+- **iOS Status**: ✅ Fully implemented
+  - Parses Flutter function definitions to LeapSDK `LeapFunction` format
+  - Stores functions per conversation in `registeredFunctions` dictionary
+  - Passes functions via `GenerateOptions().addFunction()` during `generateResponse()` calls
+  - Handles `.functionCall` responses and routes back to Dart (already implemented)
+  - Converts all parameter types: string, number, integer, boolean, null, array, object (with enum support)
+  - **File**: `ios/Classes/LiquidAiLeapPlugin.swift:693-731` + helpers at lines 818-920
 
 ##### 2. **Download Progress Callbacks**
 - **Status**: Partially implemented
@@ -148,11 +147,11 @@ All Android platform methods have been fully implemented following the official 
 | Conversation Management | ✅ | ✅ |
 | Streaming Generation | ✅ | ✅ |
 | Stop Generation | ⏳ | ✅ |
-| **Function Calling** | ⏳ | **✅** |
+| **Function Calling** | **✅** | **✅** |
 | Model Cache/Delete | ✅ | ✅ |
 | History Management | ✅ | ✅ |
 
-**iOS** = 7/9 features complete (78%)  
+**iOS** = 8/9 features complete (89%)  
 **Android** = 9/9 features complete (100%) ✅
 
 ### Android Implementation - ✅ FULLY COMPLETE (SDK v0.8.1)
