@@ -58,4 +58,18 @@ abstract class ModelRunner {
   /// );
   /// ```
   Future<Conversation> createConversationFromHistory(List<ChatMessage> history);
+
+  /// Unloads the model and frees associated resources.
+  ///
+  /// Call this method when you're done using the model to release memory
+  /// and other native resources. After calling this method, the model runner
+  /// should not be used again.
+  ///
+  /// ## Example
+  ///
+  /// ```dart
+  /// // When done with the model
+  /// await modelRunner.unload();
+  /// ```
+  Future<void> unload();
 }

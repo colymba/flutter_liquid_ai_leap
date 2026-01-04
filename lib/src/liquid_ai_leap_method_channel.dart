@@ -309,6 +309,7 @@ class _MethodChannelModelRunner extends ModelRunner {
     );
   }
 
+  @override
   Future<void> unload() async {
     await channel.invokeMethod('unloadModel', {'runnerId': runnerId});
   }
