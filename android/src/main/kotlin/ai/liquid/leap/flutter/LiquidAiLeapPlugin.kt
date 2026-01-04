@@ -1181,6 +1181,23 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                         val jpegBytes = contentMap["jpegData"] as? ByteArray ?: return@mapNotNull null
                         ChatMessageContent.Image(jpegBytes)
                     }
+                    "image_url" -> {
+                        val imageUrlMap = contentMap["image_url"] as? Map<*, *> ?: return@mapNotNull null
+                        val url = imageUrlMap["url"] as? String ?: return@mapNotNull null
+                        
+                        // Handle data URL format: data:image/jpeg;base64,...
+                        if (url.startsWith("data:image")) {
+                            val base64Data = url.substringAfter("base64,")
+                            try {
+                                val jpegBytes = android.util.Base64.decode(base64Data, android.util.Base64.DEFAULT)
+                                ChatMessageContent.Image(jpegBytes)
+                            } catch (e: Exception) {
+                                null
+                            }
+                        } else {
+                            null
+                        }
+                    }
                     // Audio content is not supported in input for now
                     else -> null
                 }
