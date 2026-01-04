@@ -63,9 +63,8 @@
 ///
 /// ## See Also
 ///
-/// - [LEAP Documentation](https://docs.liquid.ai/leap/edge-sdk/overview)
 /// - [Model Library](https://leap.liquid.ai/models)
-library liquid_ai_leap;
+library;
 
 // Core exports
 export 'src/liquid_ai_leap.dart';

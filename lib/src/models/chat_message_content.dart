@@ -192,7 +192,7 @@ class AudioContent extends ChatMessageContent {
 
   /// Creates audio content from PCM float samples.
   ///
-  /// [samples] is a list of PCM float samples in the range [-1.0, 1.0].
+  /// [samples] is a list of PCM float samples in the range `[-1.0, 1.0]`.
   /// [sampleRate] is the sample rate in Hz.
   factory AudioContent.fromFloatSamples(
     List<double> samples, {

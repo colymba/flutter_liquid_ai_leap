@@ -62,7 +62,7 @@ class GenerationOptions {
   /// JSON schema constraint for structured output.
   ///
   /// When set, the model will generate output that conforms to the given
-  /// JSON schema. Use [setResponseFormat] to set this from a Dart type.
+  /// JSON schema.
   final String? jsonSchemaConstraint;
 
   /// Maximum number of tokens to generate.

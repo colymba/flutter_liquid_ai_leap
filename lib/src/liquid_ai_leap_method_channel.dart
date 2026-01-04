@@ -42,49 +42,50 @@ class MethodChannelLiquidAiLeap extends LiquidAiLeapPlatform {
 
   /// Handles method calls from the native platform.
   Future<dynamic> _handleMethodCall(MethodCall call) async {
+    final args = call.arguments as Map<dynamic, dynamic>;
     switch (call.method) {
       case 'onDownloadProgress':
-        final callbackId = call.arguments['callbackId'] as String;
-        final progress = call.arguments['progress'] as double;
-        final bytesPerSecond = call.arguments['bytesPerSecond'] as int;
+        final callbackId = args['callbackId'] as String;
+        final progress = args['progress'] as double;
+        final bytesPerSecond = args['bytesPerSecond'] as int;
         _progressCallbacks[callbackId]?.call(progress, bytesPerSecond);
         return;
 
       case 'onGenerationResponse':
-        final callbackId = call.arguments['callbackId'] as String;
+        final callbackId = args['callbackId'] as String;
         final controller = _streamControllers[callbackId];
         if (controller == null || controller.isClosed) return;
 
-        final type = call.arguments['type'] as String;
+        final type = args['type'] as String;
         switch (type) {
           case 'chunk':
-            final text = call.arguments['text'] as String;
+            final text = args['text'] as String;
             controller.add(ChunkResponse(text));
 
           case 'reasoning_chunk':
-            final text = call.arguments['text'] as String;
+            final text = args['text'] as String;
             controller.add(ReasoningChunkResponse(text));
 
           case 'audio_sample':
-            final samples = (call.arguments['samples'] as List).cast<double>();
-            final sampleRate = call.arguments['sampleRate'] as int? ?? 16000;
+            final samples = (args['samples'] as List).cast<double>();
+            final sampleRate = args['sampleRate'] as int? ?? 16000;
             controller.add(AudioSampleResponse(
               samples: samples,
               sampleRate: sampleRate,
             ));
 
           case 'function_call':
-            final functionCalls = (call.arguments['functionCalls'] as List)
+            final functionCalls = (args['functionCalls'] as List)
                 .map((e) => _parseFunctionCall(e as Map))
                 .toList();
             controller.add(FunctionCallResponse(functionCalls));
 
           case 'complete':
-            final message = _parseChatMessage(call.arguments['message'] as Map);
-            final finishReasonStr = call.arguments['finishReason'] as String;
+            final message = _parseChatMessage(args['message'] as Map);
+            final finishReasonStr = args['finishReason'] as String;
             final finishReason =
                 GenerationFinishReason.fromString(finishReasonStr);
-            final stats = _parseStats(call.arguments['stats'] as Map?);
+            final stats = _parseStats(args['stats'] as Map?);
             controller.add(CompleteResponse(
               message: message,
               finishReason: finishReason,
@@ -94,7 +95,7 @@ class MethodChannelLiquidAiLeap extends LiquidAiLeapPlatform {
             _streamControllers.remove(callbackId);
 
           case 'error':
-            final error = call.arguments['error'] as String;
+            final error = args['error'] as String;
             controller.addError(Exception(error));
             await controller.close();
             _streamControllers.remove(callbackId);
