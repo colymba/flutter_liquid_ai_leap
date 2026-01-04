@@ -60,10 +60,14 @@ These models have been successfully tested for on-device inference using the plu
 - Swift 5.9+
 - Physical device recommended (3GB+ RAM)
 
+**Un-tested:** if you have, let me know.
+
 ### Android
 - API 31+ (Android 12)
 - arm64-v8a ABI
 - Physical device recommended (3GB+ RAM)
+
+**Tested on a Pixel 8a**
 
 ## Installation
 

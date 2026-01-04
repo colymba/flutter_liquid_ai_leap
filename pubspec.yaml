@@ -30,3 +30,11 @@ flutter:
         pluginClass: LiquidAiLeapPlugin
       ios:
         pluginClass: LiquidAiLeapPlugin
+
+# Topics (5 max) for pub.dev discoverability
+topics:
+  - liquid-ai
+  - gguf
+  - genai
+  - liquid-ai-leap
+  - edge-inference
