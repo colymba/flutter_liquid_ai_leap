@@ -5,6 +5,10 @@ A Flutter plugin for on-device AI inference using [Liquid AI's LEAP SDK](https:/
 [![pub package](https://img.shields.io/pub/v/liquid_ai_leap.svg)](https://pub.dev/packages/liquid_ai_leap)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
+## Why this plugin?
+
+This supports **GGUF models**! Compared to LiteRT or ONNX GenAI, this give access to a much larger range of models.
+
 ## Features
 
 - 🚀 **On-device inference** - Run AI models locally without internet
@@ -16,11 +20,37 @@ A Flutter plugin for on-device AI inference using [Liquid AI's LEAP SDK](https:/
 
 ## Supported Models
 
+The plugin supports models from LiquidAI but also any GGUF model!
+
+### Liquid AI Models
+
+**LFM2-** Multimodal Models from liquid AI LEAP.
+- Leap Library: [LFM2-1.2B](https://leap.liquid.ai/models)
+- Leap Bundles: [Hugging Face: LiquidAI/LeapBundles](https://huggingface.co/LiquidAI/LeapBundles/tree/main)
+- Liquid AI Models: [Hugging Face: LiquidAI/models](https://huggingface.co/LiquidAI/models)
+
+### GGUF Models
+
+More about [GGUF](https://huggingface.co/docs/hub/en/gguf).
+- Find GGUF models on [Hugging Face](https://huggingface.co/models?library=gguf).
+
+**Note:** The SDK now [recommends using GGUF](https://docs.liquid.ai/leap/edge-sdk/android/android-quick-start-guide#3-getting-and-loading-models) models instead of ExecuTorch bundles.
+
+#### Tested models
+
+These models have been successfully tested for on-device inference using the plugin.
+
 | Model | Parameters | Quantizations | Capabilities |
-|-------|-----------|---------------|--------------|
-| LFM2-1.2B | 1.2B | Q5_K_M, Q4_K_M | Text |
-| LFM2-1.2B-Vision | 1.2B | Q5_K_M | Text, Vision |
-| LFM2-1.2B-Audio | 1.2B | Q5_K_M | Text, Audio |
+|-------|------------|---------------|--------------|
+| **LFM2-VL-1.6B** | 1.6B | Q8_0 (bundle) | Text, Vision |
+| **LFM2-VL-3B** | 3B | Q8_0 (bundle) | Text, Vision |
+| **LFM2-VL-3B-GGUF** | 3B | Q4_0 | Text, Vision |
+| **Qwen3-VL-2B** | 2B | Q4_K_M | Text, Vision |
+| **GLM-Edge-V-2B** | 1.6B | Q4_K_M | Text, Vision |
+| **Qwen2-VL-2B** | 2B | Q5, Q4 | Text, Vision |
+| **InternVL3-2B** | 1.8B | Q4_K_M | Text, Vision |
+| **Omni-Reasoner-2B** | 1.5B | Q4_0 | Text, Vision |
+| **Granite-Vision-3.2-2B** | 2.5B | Q4_K_M | Text, Vision |
 
 ## Requirements
 
@@ -69,6 +99,8 @@ final modelRunner = await leap.loadModel(
   },
 );
 ```
+
+**Note:** The `loadModel` will search Leap models library using `model` and `quantization` parameters. During testing this was found to be somewhat unrialiable. If you are having issues with the *auto-download* like me, use the `downloadModel` method to download the model first, then use the `loadModel` method to load the model. `downloadModel` uses the `url` parameter to download the model (*.bundle* or *.gguf*) from Hugging Face for example.
 
 ### 2. Create a Conversation
 
@@ -235,6 +267,10 @@ final isCached = await leap.isModelCached(
 final manifest = await leap.downloadModel(
   model: 'LFM2-1.2B',
   quantization: 'Q5_K_M',
+  url: 'https://huggingface.co/LiquidAI/LeapBundles/resolve/main/LFM2-1_2B_8da4w.bundle?download=true',
+  onProgress: (progress, bytesPerSecond) {
+    print('Downloading: ${(progress * 100).toStringAsFixed(1)}%');
+  },
 );
 
 // Delete a cached model
@@ -328,7 +364,7 @@ See the [API documentation](https://pub.dev/documentation/liquid_ai_leap/latest/
 
 ## Contributing
 
-Contributions are welcome! Please read our [contributing guide](CONTRIBUTING.md) first.
+Contributions are welcome!
 
 ## License
 
@@ -337,4 +373,3 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## Acknowledgments
 
 - [Liquid AI](https://liquid.ai) for the LEAP SDK
-- The Flutter team for the excellent plugin development tools
