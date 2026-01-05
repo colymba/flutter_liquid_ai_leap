@@ -447,6 +447,8 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
         result: Result
     ) {
         withContext(Dispatchers.IO) {
+            var urlConnection: java.net.HttpURLConnection? = null
+            var tempFile: File? = null
             try {
                 // Determine the save path
                 val baseDir = if (saveDirectory != null) {
@@ -493,17 +495,22 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                 }
                 
                 // Download the file
-                val urlConnection = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+                urlConnection = java.net.URL(url).openConnection() as java.net.HttpURLConnection
                 urlConnection.requestMethod = "GET"
                 urlConnection.setRequestProperty("User-Agent", "LiquidAI-Leap-Flutter/1.0")
                 urlConnection.connect()
                 
+                val responseCode = urlConnection.responseCode
+                if (responseCode !in 200..299) {
+                    throw Exception("Server returned HTTP $responseCode")
+                }
+
                 val totalSize = urlConnection.contentLengthLong
                 var downloadedSize = 0L
                 var lastProgressUpdate = System.currentTimeMillis()
                 var lastDownloadedSize = 0L
                 
-                val tempFile = File(outputFile.parent, "${outputFile.name}.tmp")
+                tempFile = File(outputFile.parent, "${outputFile.name}.tmp")
                 
                 urlConnection.inputStream.use { input ->
                     java.io.FileOutputStream(tempFile).use { output ->
@@ -550,8 +557,6 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                     }
                 }
                 
-                urlConnection.disconnect()
-                
                 // Rename temp file to final file
                 tempFile.renameTo(outputFile)
                 
@@ -578,11 +583,16 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                     )
                 )
             } catch (e: Exception) {
+                // Clean up temp file on error
+                tempFile?.let { if (it.exists()) it.delete() }
+                
                 result.error(
                     "DOWNLOAD_ERROR",
                     "Failed to download from URL: ${e.message}",
                     null
                 )
+            } finally {
+                urlConnection?.disconnect()
             }
         }
     }
