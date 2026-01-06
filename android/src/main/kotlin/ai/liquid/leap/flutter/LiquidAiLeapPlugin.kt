@@ -216,6 +216,7 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                 // If multiple .gguf files exist (e.g. main model + projector), 
                 // prioritize .bundle, then largest .gguf that doesn't contain "mmproj"
                 var bundleFile: File? = null
+                var projectorFile: File? = null
                 
                 // 1. Look for .bundle files
                 val bundleFiles = modelDir.listFiles { _, name -> name.endsWith(".bundle") }
@@ -227,9 +228,10 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                 if (bundleFile == null) {
                     val ggufFiles = modelDir.listFiles { _, name -> name.endsWith(".gguf") }
                     if (!ggufFiles.isNullOrEmpty()) {
-                        // Filter out mmproj files if possible, or just pick the largest one (main model usually > projector)
+                        // Separate main models from projector files
                         // Heuristic: files with "mmproj" in name are projectors
                         val mainModels = ggufFiles.filter { !it.name.contains("mmproj", ignoreCase = true) }
+                        val projectorModels = ggufFiles.filter { it.name.contains("mmproj", ignoreCase = true) }
                         
                         if (mainModels.isNotEmpty()) {
                             // Pick the largest main model file
@@ -238,10 +240,16 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                             // Fallback to largest GGUF if all contain mmproj or none match filter
                             bundleFile = ggufFiles.maxByOrNull { it.length() }
                         }
+                        
+                        // Pick projector file if available (usually only one)
+                        if (projectorModels.isNotEmpty()) {
+                            projectorFile = projectorModels.maxByOrNull { it.length() }
+                        }
                     }
                 }
                 
                 val modelPath = bundleFile?.absolutePath ?: modelDir.absolutePath
+                val projectorPath = projectorFile?.absolutePath
                 
                 // Report progress start
                 progressCallbackId?.let { callbackId ->
@@ -255,8 +263,12 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                     )
                 }
                 
-                // Load model using LeapClient
-                val runner = LeapClient.loadModel(modelPath)
+                // Load model using LeapClient with projector if available
+                val runner = if (projectorPath != null) {
+                    LeapClient.loadModel(modelPath, projectorPath)
+                } else {
+                    LeapClient.loadModel(modelPath)
+                }
 
                 val runnerId = generateId()
                 modelRunners[runnerId] = runner

@@ -162,20 +162,54 @@ public class LiquidAiLeapPlugin: NSObject, FlutterPlugin {
                     modelPath = "\(documentsPath)/leap_models/\(model)/\(quantization)"
                 }
                 
-                // Look for model file (.bundle or .gguf)
+                // Look for model file (.bundle or .gguf) and optional projector
                 let fileManager = FileManager.default
                 var modelURL: URL? = nil
+                var projectorURL: URL? = nil
                 
                 // Check if path exists as directory
                 var isDirectory: ObjCBool = false
                 if fileManager.fileExists(atPath: modelPath, isDirectory: &isDirectory) {
                     if isDirectory.boolValue {
-                        // Look for .bundle or .gguf file in directory
+                        // Look for .bundle or .gguf files in directory
                         if let contents = try? fileManager.contentsOfDirectory(atPath: modelPath) {
+                            var ggufFiles: [String] = []
+                            
                             for file in contents {
-                                if file.hasSuffix(".bundle") || file.hasSuffix(".gguf") {
+                                if file.hasSuffix(".bundle") {
                                     modelURL = URL(fileURLWithPath: modelPath).appendingPathComponent(file)
                                     break
+                                } else if file.hasSuffix(".gguf") {
+                                    ggufFiles.append(file)
+                                }
+                            }
+                            
+                            // If no bundle found, process .gguf files
+                            if modelURL == nil && !ggufFiles.isEmpty {
+                                // Separate main model from projector files
+                                let mainFiles = ggufFiles.filter { !$0.lowercased().contains("mmproj") }
+                                let projectorFiles = ggufFiles.filter { $0.lowercased().contains("mmproj") }
+                                
+                                // Pick main model (largest if multiple)
+                                if !mainFiles.isEmpty {
+                                    let mainFile = mainFiles.max { f1, f2 in
+                                        let url1 = URL(fileURLWithPath: modelPath).appendingPathComponent(f1)
+                                        let url2 = URL(fileURLWithPath: modelPath).appendingPathComponent(f2)
+                                        let size1 = (try? fileManager.attributesOfItem(atPath: url1.path)[.size] as? Int64) ?? 0
+                                        let size2 = (try? fileManager.attributesOfItem(atPath: url2.path)[.size] as? Int64) ?? 0
+                                        return size1 < size2
+                                    }
+                                    if let mainFile = mainFile {
+                                        modelURL = URL(fileURLWithPath: modelPath).appendingPathComponent(mainFile)
+                                    }
+                                } else if !ggufFiles.isEmpty {
+                                    // Fallback to largest .gguf
+                                    modelURL = URL(fileURLWithPath: modelPath).appendingPathComponent(ggufFiles[0])
+                                }
+                                
+                                // Pick projector file if available (usually only one)
+                                if !projectorFiles.isEmpty {
+                                    projectorURL = URL(fileURLWithPath: modelPath).appendingPathComponent(projectorFiles[0])
                                 }
                             }
                         }
@@ -206,8 +240,13 @@ public class LiquidAiLeapPlugin: NSObject, FlutterPlugin {
                     return
                 }
                 
-                // Load model with LeapSDK using URL-based API
-                let runner = try await Leap.load(url: finalModelURL)
+                // Load model with LeapSDK using URL-based API with optional projector
+                let runner: Any
+                if let projectorURL = projectorURL {
+                    runner = try await Leap.load(url: finalModelURL, multimodalProjectorURL: projectorURL)
+                } else {
+                    runner = try await Leap.load(url: finalModelURL)
+                }
                 
                 // Generate a unique ID for the model runner
                 let runnerId = self.generateId()
