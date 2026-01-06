@@ -213,8 +213,32 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                 val modelDir = File(baseDir, "$model/$quantization")
                 
                 // Find the bundle file (either .bundle or .gguf)
-                val bundleFile = modelDir.listFiles()?.find { 
-                    it.name.endsWith(".bundle") || it.name.endsWith(".gguf") 
+                // If multiple .gguf files exist (e.g. main model + projector), 
+                // prioritize .bundle, then largest .gguf that doesn't contain "mmproj"
+                var bundleFile: File? = null
+                
+                // 1. Look for .bundle files
+                val bundleFiles = modelDir.listFiles { _, name -> name.endsWith(".bundle") }
+                if (!bundleFiles.isNullOrEmpty()) {
+                    bundleFile = bundleFiles[0]
+                }
+                
+                // 2. If no bundle, look for .gguf files
+                if (bundleFile == null) {
+                    val ggufFiles = modelDir.listFiles { _, name -> name.endsWith(".gguf") }
+                    if (!ggufFiles.isNullOrEmpty()) {
+                        // Filter out mmproj files if possible, or just pick the largest one (main model usually > projector)
+                        // Heuristic: files with "mmproj" in name are projectors
+                        val mainModels = ggufFiles.filter { !it.name.contains("mmproj", ignoreCase = true) }
+                        
+                        if (mainModels.isNotEmpty()) {
+                            // Pick the largest main model file
+                            bundleFile = mainModels.maxByOrNull { it.length() }
+                        } else {
+                            // Fallback to largest GGUF if all contain mmproj or none match filter
+                            bundleFile = ggufFiles.maxByOrNull { it.length() }
+                        }
+                    }
                 }
                 
                 val modelPath = bundleFile?.absolutePath ?: modelDir.absolutePath
@@ -297,13 +321,20 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
         }
 
         val progressCallbackId = call.argument<String>("progressCallbackId")
-        val directUrl = call.argument<String>("url") // Optional direct download URL for VL models
+        
+        // Support both single URL and list of URLs
+        val directUrl = call.argument<String>("url") 
+        val directUrls = call.argument<List<String>>("urls")
+        
         val saveDirectory = call.argument<String>("saveDirectory")
 
         scope.launch {
             try {
-                // First try to resolve from Leap Model Library
-                val downloadableModel = LeapDownloadableModel.resolve(model, quantization)
+                // First try to resolve from Leap Model Library (only if no direct URLs provided)
+                var downloadableModel: LeapDownloadableModel? = null
+                if (directUrl == null && directUrls == null) {
+                    downloadableModel = LeapDownloadableModel.resolve(model, quantization)
+                }
                 
                 if (downloadableModel != null) {
                     // Use SDK's model downloader
@@ -315,10 +346,20 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                         quantization,
                         result
                     )
+                } else if (directUrls != null && directUrls.isNotEmpty()) {
+                    // Download multiple files from URLs
+                    downloadViaDirectUrls(
+                        directUrls,
+                        model,
+                        quantization,
+                        saveDirectory,
+                        progressCallbackId,
+                        result
+                    )
                 } else if (directUrl != null) {
-                    // Fallback to direct URL download for VL and other models not in library
-                    downloadViaDirectUrl(
-                        directUrl,
+                    // Fallback to single direct URL download
+                    downloadViaDirectUrls(
+                        listOf(directUrl),
                         model,
                         quantization,
                         saveDirectory,
@@ -329,7 +370,7 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                     result.error(
                         "MODEL_NOT_FOUND",
                         "Model '$model' with quantization '$quantization' not found in Leap Model Library. " +
-                        "For VL models, provide a direct download URL.",
+                        "For VL models, provide direct download URL(s).",
                         null
                     )
                 }
@@ -438,8 +479,12 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
      * Downloads a model directly from a URL (e.g., HuggingFace).
      * Used for VL models and other models not in the Leap Model Library.
      */
-    private suspend fun downloadViaDirectUrl(
-        url: String,
+    /**
+     * Downloads models directly from a list of URLs (e.g., HuggingFace).
+     * Used for VL models (split files) and other models not in the Leap Model Library.
+     */
+    private suspend fun downloadViaDirectUrls(
+        urls: List<String>,
         model: String,
         quantization: String,
         saveDirectory: String?,
@@ -447,118 +492,142 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
         result: Result
     ) {
         withContext(Dispatchers.IO) {
-            var urlConnection: java.net.HttpURLConnection? = null
-            var tempFile: File? = null
+            var lastModelPath = ""
+            val totalFiles = urls.size
+            
             try {
-                // Determine the save path
+                // Determine the save path (shared for all files)
                 val baseDir = if (saveDirectory != null) {
                     File(saveDirectory)
                 } else {
                     File(context.filesDir, "leap_models")
                 }
                 
-                // Create model directory - use model/quantization structure to match loadModel
+                // Create model directory - use model/quantization structure
                 val modelDir = File(baseDir, "$model/$quantization")
                 if (!modelDir.exists()) {
                     modelDir.mkdirs()
                 }
-                
-                // Determine filename from URL or use default
-                val fileName = url.substringAfterLast("/").substringBefore("?")
-                    .ifEmpty { "${model}_${quantization}.bundle" }
-                val outputFile = File(modelDir, fileName)
-                
-                // Skip if already downloaded
-                if (outputFile.exists() && outputFile.length() > 0) {
-                    progressCallbackId?.let { callbackId ->
-                        withContext(Dispatchers.Main) {
-                            channel.invokeMethod(
-                                "onDownloadProgress",
-                                mapOf(
-                                    "callbackId" to callbackId,
-                                    "progress" to 1.0,
-                                    "bytesPerSecond" to 0
-                                )
-                            )
-                        }
-                    }
-                    
-                    result.success(
-                        mapOf(
-                            "modelPath" to outputFile.absolutePath,
-                            "modelId" to "${model}_${quantization}",
-                            "model" to model,
-                            "quantization" to quantization
-                        )
-                    )
-                    return@withContext
-                }
-                
-                // Download the file
-                urlConnection = java.net.URL(url).openConnection() as java.net.HttpURLConnection
-                urlConnection.requestMethod = "GET"
-                urlConnection.setRequestProperty("User-Agent", "LiquidAI-Leap-Flutter/1.0")
-                urlConnection.connect()
-                
-                val responseCode = urlConnection.responseCode
-                if (responseCode !in 200..299) {
-                    throw Exception("Server returned HTTP $responseCode")
-                }
 
-                val totalSize = urlConnection.contentLengthLong
-                var downloadedSize = 0L
-                var lastProgressUpdate = System.currentTimeMillis()
-                var lastDownloadedSize = 0L
+                // Calculate cumulative progress
+                // We'll give each file an equal share of the progress bar for simplicity
+                val progressPerFile = 1.0 / totalFiles
                 
-                tempFile = File(outputFile.parent, "${outputFile.name}.tmp")
-                
-                urlConnection.inputStream.use { input ->
-                    java.io.FileOutputStream(tempFile).use { output ->
-                        val buffer = ByteArray(8192)
-                        var bytesRead: Int
+                for ((index, url) in urls.withIndex()) {
+                    val currentFileBaseProgress = index * progressPerFile
+                    
+                    var urlConnection: java.net.HttpURLConnection? = null
+                    var tempFile: File? = null
+                    
+                    try {
+                        // Determine filename from URL or use default
+                        val fileName = url.substringAfterLast("/").substringBefore("?")
+                            .ifEmpty { "${model}_${quantization}_$index.gguf" }
+                        val outputFile = File(modelDir, fileName)
                         
-                        while (input.read(buffer).also { bytesRead = it } != -1) {
-                            output.write(buffer, 0, bytesRead)
-                            downloadedSize += bytesRead
-                            
-                            // Update progress every 100ms
-                            val now = System.currentTimeMillis()
-                            if (now - lastProgressUpdate >= 100) {
-                                val progress = if (totalSize > 0) {
-                                    downloadedSize.toDouble() / totalSize
-                                } else {
-                                    0.0
-                                }
-                                
-                                val elapsedSeconds = (now - lastProgressUpdate) / 1000.0
-                                val bytesPerSecond = if (elapsedSeconds > 0) {
-                                    ((downloadedSize - lastDownloadedSize) / elapsedSeconds).toLong()
-                                } else {
-                                    0L
-                                }
-                                
-                                progressCallbackId?.let { callbackId ->
-                                    withContext(Dispatchers.Main) {
-                                        channel.invokeMethod(
-                                            "onDownloadProgress",
-                                            mapOf(
-                                                "callbackId" to callbackId,
-                                                "progress" to progress,
-                                                "bytesPerSecond" to bytesPerSecond
-                                            )
+                        // Track the last file path as the return value (usually safe enough if single file, 
+                        // or just one of them if multiple)
+                        if (fileName.endsWith(".gguf") && !fileName.contains("mmproj")) {
+                            lastModelPath = outputFile.absolutePath
+                        } else if (lastModelPath.isEmpty()) {
+                            lastModelPath = outputFile.absolutePath
+                        }
+                        
+                        // Skip if already downloaded
+                        if (outputFile.exists() && outputFile.length() > 0) {
+                            // Update progress for skipped file
+                            progressCallbackId?.let { callbackId ->
+                                withContext(Dispatchers.Main) {
+                                    channel.invokeMethod(
+                                        "onDownloadProgress",
+                                        mapOf(
+                                            "callbackId" to callbackId,
+                                            "progress" to (currentFileBaseProgress + progressPerFile),
+                                            "bytesPerSecond" to 0
                                         )
+                                    )
+                                }
+                            }
+                            continue
+                        }
+                        
+                        // Download the file
+                        urlConnection = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+                        urlConnection.requestMethod = "GET"
+                        urlConnection.setRequestProperty("User-Agent", "LiquidAI-Leap-Flutter/1.0")
+                        urlConnection.connect()
+                        
+                        val responseCode = urlConnection.responseCode
+                        if (responseCode !in 200..299) {
+                            throw Exception("Server returned HTTP $responseCode for URL: $url")
+                        }
+
+                        val totalSize = urlConnection.contentLengthLong
+                        var downloadedSize = 0L
+                        var lastProgressUpdate = System.currentTimeMillis()
+                        var lastDownloadedSize = 0L
+                        
+                        tempFile = File(outputFile.parent, "${outputFile.name}.tmp")
+                        
+                        urlConnection.inputStream.use { input ->
+                            java.io.FileOutputStream(tempFile).use { output ->
+                                val buffer = ByteArray(8192)
+                                var bytesRead: Int
+                                
+                                while (input.read(buffer).also { bytesRead = it } != -1) {
+                                    output.write(buffer, 0, bytesRead)
+                                    downloadedSize += bytesRead
+                                    
+                                    // Update progress every 100ms
+                                    val now = System.currentTimeMillis()
+                                    if (now - lastProgressUpdate >= 100) {
+                                        val fileProgress = if (totalSize > 0) {
+                                            downloadedSize.toDouble() / totalSize
+                                        } else {
+                                            0.0
+                                        }
+                                        
+                                        // Map file progress to overall progress
+                                        val totalProgress = currentFileBaseProgress + (fileProgress * progressPerFile)
+                                        
+                                        val elapsedSeconds = (now - lastProgressUpdate) / 1000.0
+                                        val bytesPerSecond = if (elapsedSeconds > 0) {
+                                            ((downloadedSize - lastDownloadedSize) / elapsedSeconds).toLong()
+                                        } else {
+                                            0L
+                                        }
+                                        
+                                        progressCallbackId?.let { callbackId ->
+                                            withContext(Dispatchers.Main) {
+                                                channel.invokeMethod(
+                                                    "onDownloadProgress",
+                                                    mapOf(
+                                                        "callbackId" to callbackId,
+                                                        "progress" to totalProgress,
+                                                        "bytesPerSecond" to bytesPerSecond
+                                                    )
+                                                )
+                                            }
+                                        }
+                                        
+                                        lastProgressUpdate = now
+                                        lastDownloadedSize = downloadedSize
                                     }
                                 }
-                                
-                                lastProgressUpdate = now
-                                lastDownloadedSize = downloadedSize
                             }
                         }
+                        
+                        // Rename temp file to final file
+                        tempFile.renameTo(outputFile)
+                        
+                    } catch (e: Exception) {
+                        // Clean up temp file on error
+                        tempFile?.let { if (it.exists()) it.delete() }
+                        throw e
+                    } finally {
+                        urlConnection?.disconnect()
                     }
                 }
-                
-                // Rename temp file to final file
-                tempFile.renameTo(outputFile)
                 
                 // Final progress update
                 progressCallbackId?.let { callbackId ->
@@ -576,23 +645,19 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                 
                 result.success(
                     mapOf(
-                        "modelPath" to outputFile.absolutePath,
+                        "modelPath" to lastModelPath,
                         "modelId" to "${model}_${quantization}",
                         "model" to model,
                         "quantization" to quantization
                     )
                 )
+
             } catch (e: Exception) {
-                // Clean up temp file on error
-                tempFile?.let { if (it.exists()) it.delete() }
-                
                 result.error(
                     "DOWNLOAD_ERROR",
-                    "Failed to download from URL: ${e.message}",
+                    "Failed to download from URL(s): ${e.message}",
                     null
                 )
-            } finally {
-                urlConnection?.disconnect()
             }
         }
     }

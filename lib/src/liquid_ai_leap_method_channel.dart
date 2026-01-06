@@ -165,6 +165,7 @@ class MethodChannelLiquidAiLeap extends LiquidAiLeapPlatform {
     required String model,
     required String quantization,
     String? url,
+    List<String>? urls,
     LeapDownloaderConfig? config,
     void Function(double progress, int bytesPerSecond)? onProgress,
   }) async {
@@ -179,6 +180,7 @@ class MethodChannelLiquidAiLeap extends LiquidAiLeapPlatform {
         'model': model,
         'quantization': quantization,
         if (url != null) 'url': url,
+        if (urls != null) 'urls': urls,
         if (config?.saveDirectory != null)
           'saveDirectory': config!.saveDirectory,
         if (progressCallbackId != null)

@@ -110,9 +110,9 @@ class LiquidAiLeap {
   ///
   /// Returns a [ModelManifest] with information about the downloaded model.
   ///
-  /// If [url] is provided, the model will be downloaded directly from that URL
-  /// instead of using the Leap Model Library. This is useful for VL (vision-language)
-  /// models and other models not yet available in the library.
+  /// If [url] is provided, the model will be downloaded directly from that URL.
+  /// If [urls] is provided (List<String>), multiple files will be downloaded (e.g. split GGUF + mmproj).
+  /// This is useful for VL (vision-language) models and other models not yet available in the library.
   ///
   /// ## Example
   ///
@@ -124,17 +124,21 @@ class LiquidAiLeap {
   /// );
   /// print('Downloaded to: ${manifest.localModelPath}');
   ///
-  /// // Download a VL model directly from HuggingFace
+  /// // Download a VL model directly from URLs (split files)
   /// final vlManifest = await leap.downloadModel(
-  ///   model: 'LFM2-VL-1.6B',
-  ///   quantization: 'Q8_0',
-  ///   url: 'https://huggingface.co/LiquidAI/LeapBundles/resolve/main/LFM2-VL-1_6B_8da4w.bundle?download=true',
+  ///   model: 'InternVL3-2B',
+  ///   quantization: 'Q4_K_S',
+  ///   urls: [
+  ///     'https://huggingface.co/.../internvl3-2b-instruct-q4_k_s.gguf',
+  ///     'https://huggingface.co/.../mmproj-internvl3-2b-instruct-f16.gguf',
+  ///   ],
   /// );
   /// ```
   Future<ModelManifest> downloadModel({
     required String model,
     required String quantization,
     String? url,
+    List<String>? urls,
     void Function(double progress, int bytesPerSecond)? onProgress,
     LeapDownloaderConfig? config,
   }) {
@@ -142,6 +146,7 @@ class LiquidAiLeap {
       model: model,
       quantization: quantization,
       url: url,
+      urls: urls,
       config: config ?? _config,
       onProgress: onProgress,
     );

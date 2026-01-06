@@ -49,6 +49,7 @@ abstract class LiquidAiLeapPlatform extends PlatformInterface {
     required String model,
     required String quantization,
     String? url,
+    List<String>? urls,
     LeapDownloaderConfig? config,
     void Function(double progress, int bytesPerSecond)? onProgress,
   });
