@@ -564,80 +564,85 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
                         }
                         
                         // Download the file
-                        urlConnection = java.net.URL(url).openConnection() as java.net.HttpURLConnection
-                        urlConnection.requestMethod = "GET"
-                        urlConnection.setRequestProperty("User-Agent", "LiquidAI-Leap-Flutter/1.0")
-                        urlConnection.connect()
-                        
-                        val responseCode = urlConnection.responseCode
-                        if (responseCode !in 200..299) {
-                            throw Exception("Server returned HTTP $responseCode for URL: $url")
-                        }
+                        try {
+                            urlConnection = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+                            urlConnection.requestMethod = "GET"
+                            urlConnection.setRequestProperty("User-Agent", "LiquidAI-Leap-Flutter/1.0")
+                            urlConnection.connect()
+                            
+                            val responseCode = urlConnection.responseCode
+                            if (responseCode !in 200..299) {
+                                // Close error stream if present
+                                urlConnection.errorStream?.close()
+                                throw Exception("Server returned HTTP $responseCode for URL: $url")
+                            }
 
-                        val totalSize = urlConnection.contentLengthLong
-                        var downloadedSize = 0L
-                        var lastProgressUpdate = System.currentTimeMillis()
-                        var lastDownloadedSize = 0L
-                        
-                        tempFile = File(outputFile.parent, "${outputFile.name}.tmp")
-                        
-                        urlConnection.inputStream.use { input ->
-                            java.io.FileOutputStream(tempFile).use { output ->
-                                val buffer = ByteArray(8192)
-                                var bytesRead: Int
-                                
-                                while (input.read(buffer).also { bytesRead = it } != -1) {
-                                    output.write(buffer, 0, bytesRead)
-                                    downloadedSize += bytesRead
+                            val totalSize = urlConnection.contentLengthLong
+                            var downloadedSize = 0L
+                            var lastProgressUpdate = System.currentTimeMillis()
+                            var lastDownloadedSize = 0L
+                            
+                            tempFile = File(outputFile.parent, "${outputFile.name}.tmp")
+                            
+                            urlConnection.inputStream.use { input ->
+                                java.io.FileOutputStream(tempFile).use { output ->
+                                    val buffer = ByteArray(8192)
+                                    var bytesRead: Int
                                     
-                                    // Update progress every 100ms
-                                    val now = System.currentTimeMillis()
-                                    if (now - lastProgressUpdate >= 100) {
-                                        val fileProgress = if (totalSize > 0) {
-                                            downloadedSize.toDouble() / totalSize
-                                        } else {
-                                            0.0
-                                        }
+                                    while (input.read(buffer).also { bytesRead = it } != -1) {
+                                        output.write(buffer, 0, bytesRead)
+                                        downloadedSize += bytesRead
                                         
-                                        // Map file progress to overall progress
-                                        val totalProgress = currentFileBaseProgress + (fileProgress * progressPerFile)
-                                        
-                                        val elapsedSeconds = (now - lastProgressUpdate) / 1000.0
-                                        val bytesPerSecond = if (elapsedSeconds > 0) {
-                                            ((downloadedSize - lastDownloadedSize) / elapsedSeconds).toLong()
-                                        } else {
-                                            0L
-                                        }
-                                        
-                                        progressCallbackId?.let { callbackId ->
-                                            withContext(Dispatchers.Main) {
-                                                channel.invokeMethod(
-                                                    "onDownloadProgress",
-                                                    mapOf(
-                                                        "callbackId" to callbackId,
-                                                        "progress" to totalProgress,
-                                                        "bytesPerSecond" to bytesPerSecond
-                                                    )
-                                                )
+                                        // Update progress every 100ms
+                                        val now = System.currentTimeMillis()
+                                        if (now - lastProgressUpdate >= 100) {
+                                            val fileProgress = if (totalSize > 0) {
+                                                downloadedSize.toDouble() / totalSize
+                                            } else {
+                                                0.0
                                             }
+                                            
+                                            // Map file progress to overall progress
+                                            val totalProgress = currentFileBaseProgress + (fileProgress * progressPerFile)
+                                            
+                                            val elapsedSeconds = (now - lastProgressUpdate) / 1000.0
+                                            val bytesPerSecond = if (elapsedSeconds > 0) {
+                                                ((downloadedSize - lastDownloadedSize) / elapsedSeconds).toLong()
+                                            } else {
+                                                0L
+                                            }
+                                            
+                                            progressCallbackId?.let { callbackId ->
+                                                withContext(Dispatchers.Main) {
+                                                    channel.invokeMethod(
+                                                        "onDownloadProgress",
+                                                        mapOf(
+                                                            "callbackId" to callbackId,
+                                                            "progress" to totalProgress,
+                                                            "bytesPerSecond" to bytesPerSecond
+                                                        )
+                                                    )
+                                                }
+                                            }
+                                            
+                                            lastProgressUpdate = now
+                                            lastDownloadedSize = downloadedSize
                                         }
-                                        
-                                        lastProgressUpdate = now
-                                        lastDownloadedSize = downloadedSize
                                     }
                                 }
                             }
+                            
+                            // Rename temp file to final file
+                            tempFile.renameTo(outputFile)
+                        } finally {
+                            // Ensure connection is always closed
+                            urlConnection?.disconnect()
                         }
-                        
-                        // Rename temp file to final file
-                        tempFile.renameTo(outputFile)
                         
                     } catch (e: Exception) {
                         // Clean up temp file on error
                         tempFile?.let { if (it.exists()) it.delete() }
                         throw e
-                    } finally {
-                        urlConnection?.disconnect()
                     }
                 }
                 
