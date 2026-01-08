@@ -36,6 +36,10 @@ More about [GGUF](https://huggingface.co/docs/hub/en/gguf).
 
 **Note:** The SDK now [recommends using GGUF](https://docs.liquid.ai/leap/edge-sdk/android/android-quick-start-guide#3-getting-and-loading-models) models instead of ExecuTorch bundles.
 
+#### Split GGUF models
+
+Now supports split `.gguf` models using `downloadModel` method with `url` parameter as a list of URLs, passing the main language gguf and the mmproj gguf. See *Split Vision Model Management* below.
+
 #### Tested models
 
 These models have been successfully tested for on-device inference using the plugin.
@@ -94,17 +98,17 @@ import 'package:liquid_ai_leap/liquid_ai_leap.dart';
 // Create plugin instance
 final leap = LiquidAiLeap();
 
-// Load a model (downloads if not cached)
+// Load a model (downloads if not cached - text only models)
 final modelRunner = await leap.loadModel(
-  model: 'LFM2-1.2B',
-  quantization: 'Q5_K_M',
+  model: 'lfm2-1.2b',
+  quantization: 'q5_k_m',
   onProgress: (progress, bytesPerSecond) {
     print('Downloading: ${(progress * 100).toStringAsFixed(1)}%');
   },
 );
 ```
 
-**Note:** The `loadModel` will search Leap models library using `model` and `quantization` parameters. During testing this was found to be somewhat unrialiable. If you are having issues with the *auto-download* like me, use the `downloadModel` method to download the model first, then use the `loadModel` method to load the model. `downloadModel` uses the `url` parameter to download the model (*.bundle* or *.gguf*) from Hugging Face for example.
+**Note:** The `loadModel` will search Leap models library using `model` and `quantization` parameters. Both parameters *should* be lowercase, and vision models are not supported for *auto-download*, trying to load a vision model will throw an error: `For VL models, provide direct download URL(s)`. Best to first use the `downloadModel` method to download the model first, then use the `loadModel` method to load the model. `downloadModel` uses the `url` parameter to download the model (*.bundle* or *.gguf*) from Hugging Face for example.
 
 ### 2. Create a Conversation
 
@@ -282,6 +286,26 @@ await leap.deleteModel(
   model: 'LFM2-1.2B',
   quantization: 'Q5_K_M',
 );
+```
+
+### Split Vision Model Management
+
+```dart
+// Download split language/vision model
+final manifest = await leap.downloadModel(
+  model: 'LFM2-1.2B',
+  quantization: 'Q5_K_M',
+  urls: [
+    'https://huggingface.co/QuantStack/InternVL3_5-1B-Instruct-gguf/resolve/main/InternVL3_5-1B-Instruct-f16.gguf?download=true',
+    'https://huggingface.co/QuantStack/InternVL3_5-1B-Instruct-gguf/resolve/main/mmproj-InternVL3_5-1B-Instruct-f16.gguf?download=true',
+  ],
+  onProgress: (progress, bytesPerSecond) {
+    print('Downloading: ${(progress * 100).toStringAsFixed(1)}%');
+  },
+);
+
+// Use loadModel with `model` ID as normal
+// Both language and projector will be loaded
 ```
 
 ### Cleanup
