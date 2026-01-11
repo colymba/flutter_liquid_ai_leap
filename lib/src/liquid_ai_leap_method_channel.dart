@@ -384,6 +384,7 @@ class _MethodChannelConversation extends Conversation {
       if (options.jsonSchemaConstraint != null)
         'jsonSchemaConstraint': options.jsonSchemaConstraint,
       if (options.maxTokens != null) 'maxTokens': options.maxTokens,
+      if (options.extras != null) 'extras': options.extras,
     };
   }
 

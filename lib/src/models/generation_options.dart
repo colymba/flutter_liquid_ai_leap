@@ -32,6 +32,7 @@ class GenerationOptions {
     this.repetitionPenalty,
     this.jsonSchemaConstraint,
     this.maxTokens,
+    this.extras,
   });
 
   /// Sampling temperature parameter.
@@ -71,6 +72,16 @@ class GenerationOptions {
   /// or the maximum context length.
   final int? maxTokens;
 
+  /// Additional parameters passed directly to the model.
+  ///
+  /// This is a flexible map that can contain any additional parameters
+  /// supported by the model, such as:
+  /// - `max_tokens`: Maximum tokens (alternative to maxTokens)
+  /// - `min_image_tokens`: Minimum image token count
+  /// - `max_image_tokens`: Maximum image token count
+  /// - `do_image_splitting`: Enable image splitting
+  final Map<String, dynamic>? extras;
+
   /// Creates a copy of this options with the given fields replaced.
   GenerationOptions copyWith({
     double? temperature,
@@ -79,6 +90,7 @@ class GenerationOptions {
     double? repetitionPenalty,
     String? jsonSchemaConstraint,
     int? maxTokens,
+    Map<String, dynamic>? extras,
   }) {
     return GenerationOptions(
       temperature: temperature ?? this.temperature,
@@ -87,6 +99,7 @@ class GenerationOptions {
       repetitionPenalty: repetitionPenalty ?? this.repetitionPenalty,
       jsonSchemaConstraint: jsonSchemaConstraint ?? this.jsonSchemaConstraint,
       maxTokens: maxTokens ?? this.maxTokens,
+      extras: extras ?? this.extras,
     );
   }
 
@@ -100,6 +113,7 @@ class GenerationOptions {
       if (jsonSchemaConstraint != null)
         'json_schema_constraint': jsonSchemaConstraint,
       if (maxTokens != null) 'max_tokens': maxTokens,
+      if (extras != null) 'extras': extras,
     };
   }
 
@@ -112,6 +126,7 @@ class GenerationOptions {
       repetitionPenalty: (json['repetition_penalty'] as num?)?.toDouble(),
       jsonSchemaConstraint: json['json_schema_constraint'] as String?,
       maxTokens: json['max_tokens'] as int?,
+      extras: json['extras'] as Map<String, dynamic>?,
     );
   }
 
@@ -124,7 +139,8 @@ class GenerationOptions {
         minP == other.minP &&
         repetitionPenalty == other.repetitionPenalty &&
         jsonSchemaConstraint == other.jsonSchemaConstraint &&
-        maxTokens == other.maxTokens;
+        maxTokens == other.maxTokens &&
+        _mapEquals(extras, other.extras);
   }
 
   @override
@@ -135,6 +151,7 @@ class GenerationOptions {
         repetitionPenalty,
         jsonSchemaConstraint,
         maxTokens,
+        extras,
       );
 
   @override
@@ -148,6 +165,17 @@ class GenerationOptions {
     }
     if (maxTokens != null) parts.add('maxTokens: $maxTokens');
     if (jsonSchemaConstraint != null) parts.add('jsonSchema: [set]');
+    if (extras != null) parts.add('extras: $extras');
     return 'GenerationOptions(${parts.join(', ')})';
+  }
+
+  // Helper for map equality
+  static bool _mapEquals(Map? a, Map? b) {
+    if (a == null) return b == null;
+    if (b == null || a.length != b.length) return false;
+    for (var key in a.keys) {
+      if (!b.containsKey(key) || a[key] != b[key]) return false;
+    }
+    return true;
   }
 }
