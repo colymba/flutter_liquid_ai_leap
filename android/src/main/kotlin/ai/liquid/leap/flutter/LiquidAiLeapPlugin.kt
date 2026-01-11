@@ -1344,6 +1344,26 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
         (map["minP"] as? Number)?.let { options.minP = it.toFloat() }
         (map["repetitionPenalty"] as? Number)?.let { options.repetitionPenalty = it.toFloat() }
         (map["jsonSchemaConstraint"] as? String)?.let { options.jsonSchemaConstraint = it }
+        
+        // Serialize extras map to comma-separated key=value format
+        // Example: "max_tokens=1024, min_image_tokens=64, do_image_splitting=True"
+        android.util.Log.d("LiquidAiLeapPlugin", "parseGenerationOptions received map keys: ${map.keys}")
+        android.util.Log.d("LiquidAiLeapPlugin", "extras raw value: ${map["extras"]}")
+        (map["extras"] as? Map<*, *>)?.let { extrasMap ->
+            android.util.Log.d("LiquidAiLeapPlugin", "extras cast successful, size: ${extrasMap.size}")
+            if (extrasMap.isNotEmpty()) {
+                options.extras = extrasMap.entries.joinToString(separator = ", ") { (key, value) ->
+                    val valueStr = when (value) {
+                        is Boolean -> if (value) "True" else "False"  // Python-style capitalization
+                        is String -> "\"$value\""
+                        else -> value.toString()
+                    }
+                    "$key=$valueStr"
+                }
+                android.util.Log.d("LiquidAiLeapPlugin", "GenerationOptions.extras: ${options.extras}")
+            }
+        }
+        
         return options
     }
 

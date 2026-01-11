@@ -30,7 +30,7 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 # Version constants - update these when upgrading
 IOS_SDK_VERSION="0.8.0"
 IOS_SDK_REPO="https://github.com/Liquid4All/leap-ios.git"
-ANDROID_SDK_VERSION="0.8.0"
+ANDROID_SDK_VERSION="0.9.1"
 ANDROID_SDK_MAVEN="ai.liquid.leap:leap-sdk"
 
 # Print colored output
