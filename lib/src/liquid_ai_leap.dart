@@ -111,7 +111,7 @@ class LiquidAiLeap {
   /// Returns a [ModelManifest] with information about the downloaded model.
   ///
   /// If [url] is provided, the model will be downloaded directly from that URL.
-  /// If [urls] is provided (List<String>), multiple files will be downloaded (e.g. split GGUF + mmproj).
+  /// If [urls] is provided (`List<String>`), multiple files will be downloaded (e.g. split GGUF + mmproj).
   /// This is useful for VL (vision-language) models and other models not yet available in the library.
   ///
   /// ## Example
