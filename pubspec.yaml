@@ -2,7 +2,7 @@ name: liquid_ai_leap
 description: >-
   A Flutter plugin wrapper for the Liquid AI LEAP SDK. Provides on-device AI 
   inference capabilities using Liquid Foundation Models (LFM) on iOS and Android.
-version: 0.2.3
+version: 0.3.0
 homepage: https://github.com/colymba/flutter_liquid_ai_leap
 repository: https://github.com/colymba/flutter_liquid_ai_leap
 issue_tracker: https://github.com/colymba/flutter_liquid_ai_leap/issues
