@@ -1414,26 +1414,26 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
             return when (typeName) {
                 "string" -> {
                     val enumValues = (map["enumValues"] as? List<*>)?.mapNotNull { it as? String }
-                    LeapFunctionParameterType.String(enumValues, description)
+                    LeapFunctionParameterType.LeapStr(enumValues, description)
                 }
                 "number" -> {
                     val enumValues = (map["enumValues"] as? List<*>)?.mapNotNull { it as? Number }
-                    LeapFunctionParameterType.Number(enumValues, description)
+                    LeapFunctionParameterType.LeapNum(enumValues, description)
                 }
                 "integer" -> {
                     val enumValues = (map["enumValues"] as? List<*>)?.mapNotNull { (it as? Number)?.toInt() }
-                    LeapFunctionParameterType.Integer(enumValues, description)
+                    LeapFunctionParameterType.LeapInt(enumValues, description)
                 }
                 "boolean" -> {
-                    LeapFunctionParameterType.Boolean(description)
+                    LeapFunctionParameterType.LeapBool(description)
                 }
                 "null" -> {
-                    LeapFunctionParameterType.Null()
+                    LeapFunctionParameterType.LeapNull()
                 }
                 "array" -> {
                     val itemTypeMap = map["itemType"] as? Map<*, *> ?: return null
                     val itemType = parseLeapFunctionParameterType(itemTypeMap) ?: return null
-                    LeapFunctionParameterType.Array(itemType, description)
+                    LeapFunctionParameterType.LeapArr(itemType, description)
                 }
                 "object" -> {
                     val propertiesMap = map["properties"] as? Map<*, *> ?: return null
@@ -1446,7 +1446,7 @@ class LiquidAiLeapPlugin : FlutterPlugin, MethodCallHandler, ActivityAware {
 
                     val required = (map["required"] as? List<*>)?.mapNotNull { it as? String } ?: listOf()
 
-                    LeapFunctionParameterType.Object(properties, required, description)
+                    LeapFunctionParameterType.LeapObj(properties, required, description)
                 }
                 else -> null
             }
