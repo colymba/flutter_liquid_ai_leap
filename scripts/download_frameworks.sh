@@ -8,7 +8,7 @@ set -e
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 FRAMEWORKS_DIR="$SCRIPT_DIR/../ios/Frameworks"
-VERSION="${1:-v0.8.0}"  # Default to v0.8.0 if no version specified
+VERSION="${1:-v0.9.2}"  # Default to v0.9.2 if no version specified
 REPO_URL="https://github.com/Liquid4All/leap-ios"
 
 echo "📦 Downloading LeapSDK $VERSION..."

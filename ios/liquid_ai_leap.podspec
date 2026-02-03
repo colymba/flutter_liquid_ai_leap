@@ -32,7 +32,7 @@ Liquid Foundation Models (LFM) via the Liquid AI LEAP SDK.
     if [ ! -d "Frameworks/LeapSDK.xcframework" ] || [ ! -d "Frameworks/LeapModelDownloader.xcframework" ]; then
       echo "⚠️  LeapSDK frameworks not found. Downloading..."
       if [ -f "../../scripts/download_frameworks.sh" ]; then
-        bash ../../scripts/download_frameworks.sh v0.8.0
+        bash ../../scripts/download_frameworks.sh v0.9.2
       else
         echo "❌ Error: download_frameworks.sh not found"
         exit 1
